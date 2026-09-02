@@ -1,0 +1,15 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: rta
+      POSTGRES_PASSWORD: rta_dev_password
+      POSTGRES_DB: real_time_assistant
+    ports:
+      - "5433:5432"
+    volumes:
+      - rta_pgdata:/var/lib/postgresql/data
+
+volumes:
+  rta_pgdata:

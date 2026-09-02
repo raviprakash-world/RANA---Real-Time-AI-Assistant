@@ -1,0 +1,189 @@
+@import "tailwindcss";
+
+:root {
+  --background: #0a0b0d;
+  --surface: #131418;
+  --surface-2: #1a1c21;
+  --border: #26282e;
+  --foreground: #e9eaec;
+  --muted: #8b8f98;
+  --accent: #5b8cff;
+  --accent-foreground: #0a0b0d;
+  --success: #34d399;
+  --warning: #fbbf24;
+  --danger: #f87171;
+  --info: #60a5fa;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-border: var(--border);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-info: var(--info);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+* {
+  border-color: var(--border);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+}
+
+/* Desktop HUD window only (see HudModeEffect.tsx / electron/main.js) — the
+   launcher window (dashboard/history/settings) never gets this class. */
+body.hud-mode {
+  background: transparent !important;
+}
+body.hud-mode #app-nav {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--surface-2);
+  border-radius: 8px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border);
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+.pulse-dot {
+  animation: pulse-dot 1.6s ease-in-out infinite;
+}
+
+.focus-ring {
+  outline: none;
+}
+.focus-ring:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Floating assistant panel — its appearance (theme) is a per-panel setting
+   independent of the app's own dark-first chrome, so it gets its own scoped
+   token set rather than touching :root. Background alpha (opacity) is
+   applied inline per the user's Settings value (see panelLayerBackground in
+   layout.ts, which derives the toolbar/context-bar/main-panel tiers from
+   it); these vars cover everything else (text/border/surface/radius/shadow
+   for the chosen panel theme) — the premium dark-glass copilot look (see
+   the RANA UI redesign) is centralized here rather than scattered as
+   hardcoded colors through each component. */
+.floating-panel {
+  --panel-fg: rgba(255, 255, 255, 0.95);
+  --panel-muted: rgba(255, 255, 255, 0.65);
+  --panel-muted-2: rgba(255, 255, 255, 0.42);
+  --panel-border: rgba(255, 255, 255, 0.1);
+  --panel-border-hover: rgba(255, 255, 255, 0.18);
+  --panel-surface-2: rgba(255, 255, 255, 0.06);
+  --panel-radius: 18px;
+  --panel-radius-sm: 12px;
+  --panel-shadow: 0 20px 50px rgba(0, 0, 0, 0.35);
+  --panel-blur: 24px;
+}
+/* StatusIndicator's "idle" state (and anything else using the plain
+   `text-muted` utility, e.g. mic/error banners) is tuned for the app's own
+   always-dark chrome. Redirect it to the panel-aware token so it stays
+   readable when the panel theme is light — everything else in the panel
+   already uses --panel-* directly. */
+.floating-panel .text-muted {
+  color: var(--panel-muted);
+}
+
+.floating-panel[data-panel-theme="light"] {
+  --panel-fg: #1a1c21;
+  --panel-muted: #5b5f6a;
+  --panel-muted-2: #8b8f98;
+  --panel-border: rgba(10, 11, 13, 0.1);
+  --panel-border-hover: rgba(10, 11, 13, 0.18);
+  --panel-surface-2: rgba(10, 11, 13, 0.05);
+  --panel-shadow: 0 20px 50px rgba(0, 0, 0, 0.18);
+}
+
+/* Click-through is toggled from the desktop shell/tray/global shortcut —
+   flip every layer's border to the warning color at once so the panel
+   visibly signals it won't accept clicks, without each .floating-layer
+   needing to know about click-through itself. */
+.floating-panel[data-click-through="true"] {
+  --panel-border: var(--warning);
+}
+
+/* A layer of the glass stack (toolbar / context bar / main panel) — each
+   gets its own background alpha tier (see panelLayerBackground) so the
+   group reads as stacked floating cards rather than one flat surface. */
+.floating-layer {
+  border: 1px solid var(--panel-border);
+  border-radius: var(--panel-radius);
+  box-shadow: var(--panel-shadow);
+  backdrop-filter: blur(var(--panel-blur));
+  -webkit-backdrop-filter: blur(var(--panel-blur));
+}
+
+@keyframes panel-in {
+  from { opacity: 0; transform: scale(0.97) translateY(8px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+.floating-panel-enter {
+  animation: panel-in 180ms ease-out;
+}
+
+@keyframes response-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.response-enter {
+  animation: response-in 200ms ease-out;
+}
+
+@keyframes audio-bar {
+  0%, 100% { transform: scaleY(0.35); }
+  50% { transform: scaleY(1); }
+}
+.audio-bar {
+  animation: audio-bar 900ms ease-in-out infinite;
+}
+
+/* Prism token colors, tuned for the always-dark code chip inside responses
+   (see CodeBlock.tsx) rather than a full imported Prism theme, so colors
+   stay consistent with the rest of the palette regardless of panel theme. */
+.token.comment { color: #6b7280; font-style: italic; }
+.token.keyword { color: #93c5fd; }
+.token.string { color: #86efac; }
+.token.function { color: #c4b5fd; }
+.token.number,
+.token.boolean { color: #fbbf24; }
+.token.operator,
+.token.punctuation { color: #9ca3af; }
+.token.class-name,
+.token.tag { color: #f9a8d4; }
+.token.property,
+.token.attr-name { color: #7dd3fc; }

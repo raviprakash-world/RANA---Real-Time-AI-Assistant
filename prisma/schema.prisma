@@ -1,0 +1,214 @@
+// Real-Time Assistant — data model
+// Notes:
+// - Schema is multi-user-ready even though Phase 1 auto-provisions a single
+//   local user and skips login UI (see lib/auth/current-user.ts).
+// - All session-scoped tables cascade-delete when a Session is deleted, so
+//   "delete session" (privacy requirement) is a single operation.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum SessionMode {
+  INTERVIEW
+  CODING
+  SYSTEM_DESIGN
+  MEETING
+  CUSTOM
+}
+
+enum SessionStatus {
+  ACTIVE
+  PAUSED
+  ENDED
+}
+
+enum Speaker {
+  INTERVIEWER
+  USER
+  UNKNOWN
+}
+
+enum QuestionType {
+  TECHNICAL
+  CODING
+  SYSTEM_DESIGN
+  BEHAVIORAL
+  CLARIFICATION
+  FOLLOW_UP
+  MEETING_TOPIC
+  NO_ACTION
+}
+
+enum AIResponseType {
+  TECHNICAL_ANSWER
+  CODING_ANSWER
+  SYSTEM_DESIGN_ANSWER
+  BEHAVIORAL_ANSWER
+  MEETING_NOTES
+  MANUAL
+}
+
+enum UploadedContextKind {
+  RESUME
+  JOB_DESCRIPTION
+  // Live, mid-session context snapshots — see src/lib/context/types.ts for
+  // the ContextProvider interface these correspond to.
+  IDE
+  BROWSER
+  TERMINAL
+  SCREEN
+  OTHER
+}
+
+model User {
+  id          String   @id @default(cuid())
+  email       String   @unique
+  name        String?
+  createdAt   DateTime @default(now())
+
+  sessions    Session[]
+  preference  UserPreference?
+}
+
+model UserPreference {
+  id              String   @id @default(cuid())
+  userId          String   @unique
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  llmProvider     String   @default("openai")
+  llmModel        String   @default("gpt-4o-mini")
+  temperature     Float    @default(0.4)
+  maxTokens       Int      @default(700)
+  language        String   @default("en-US")
+  autoAnswer      Boolean  @default(true)
+  retentionDays   Int      @default(30)
+  shortcuts       Json     @default("{}")
+  // Floating assistant panel state (position, size, opacity, theme, density,
+  // font size, focus mode, etc.) — see src/lib/floating/types.ts. Kept as a
+  // single JSON blob rather than a column per field since it's UI state
+  // owned entirely by the client, not queried on its own.
+  floatingUi      Json     @default("{}")
+
+  updatedAt       DateTime @updatedAt
+}
+
+model Session {
+  id                    String        @id @default(cuid())
+  userId                String
+  user                  User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  mode                  SessionMode
+  role                  String?
+  experience            String?
+  context               String?
+  additionalInstructions String?
+
+  status                SessionStatus @default(ACTIVE)
+  startedAt             DateTime      @default(now())
+  endedAt               DateTime?
+  durationSec           Int?
+
+  // rolling context (short-term buffer + running summary) persisted so a
+  // reload / reconnect doesn't lose conversational memory
+  rollingSummary        String?       @default("")
+  detectedTechnologies  Json          @default("[]")
+
+  transcriptSegments    TranscriptSegment[]
+  questions             Question[]
+  aiResponses           AIResponse[]
+  summary               SessionSummary?
+  uploadedContext       UploadedContext[]
+
+  createdAt             DateTime      @default(now())
+
+  @@index([userId, createdAt])
+}
+
+model TranscriptSegment {
+  id          String   @id @default(cuid())
+  sessionId   String
+  session     Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  speaker     Speaker  @default(UNKNOWN)
+  text        String
+  isFinal     Boolean  @default(false)
+  startMs     Int
+  endMs       Int?
+
+  createdAt   DateTime @default(now())
+
+  question    Question?
+
+  @@index([sessionId, createdAt])
+}
+
+model Question {
+  id                  String       @id @default(cuid())
+  sessionId           String
+  session             Session      @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  transcriptSegmentId String?      @unique
+  transcriptSegment   TranscriptSegment? @relation(fields: [transcriptSegmentId], references: [id], onDelete: SetNull)
+
+  type                QuestionType
+  confidence          Float
+  questionText        String
+
+  createdAt           DateTime     @default(now())
+
+  responses           AIResponse[]
+
+  @@index([sessionId, createdAt])
+}
+
+model AIResponse {
+  id          String         @id @default(cuid())
+  sessionId   String
+  session     Session        @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  questionId  String?
+  question    Question?      @relation(fields: [questionId], references: [id], onDelete: SetNull)
+
+  type        AIResponseType
+  payload     Json
+  latencyMs   Int?
+
+  createdAt   DateTime       @default(now())
+
+  @@index([sessionId, createdAt])
+}
+
+model SessionSummary {
+  id              String   @id @default(cuid())
+  sessionId       String   @unique
+  session         Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  topics          Json     @default("[]")
+  questionsAsked  Json     @default("[]")
+  strengths       Json     @default("[]")
+  weaknesses      Json     @default("[]")
+  actionItems     Json     @default("[]")
+  rawSummary      String
+
+  createdAt       DateTime @default(now())
+}
+
+model UploadedContext {
+  id          String              @id @default(cuid())
+  sessionId   String
+  session     Session             @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  kind        UploadedContextKind
+  filename    String
+  text        String
+
+  createdAt   DateTime            @default(now())
+
+  @@index([sessionId])
+}
