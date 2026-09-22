@@ -389,15 +389,13 @@ export function FloatingAssistant(props: FloatingAssistantProps) {
           <AddContextPanel attached={props.attachedContext} onAdd={props.onAddContext} onClose={() => setContextVisible(false)} />
         )}
 
-        {!prefs.focusMode && (
-          <TranscriptDrawer
-            segments={props.segments}
-            partialText={props.partialText}
-            visible={prefs.transcriptVisible}
-            speakerTag={props.speakerTag}
-            onToggleSpeakerTag={props.onToggleSpeakerTag}
-          />
-        )}
+        <TranscriptDrawer
+          segments={props.segments}
+          partialText={props.partialText}
+          visible={prefs.transcriptVisible}
+          speakerTag={props.speakerTag}
+          onToggleSpeakerTag={props.onToggleSpeakerTag}
+        />
 
         <div className={`flex-1 overflow-y-auto ${bodyPadding}`} style={{ fontSize }}>
           {props.aiThinking ? (

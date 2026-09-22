@@ -163,12 +163,17 @@ export function AssistantHeader({
       {!focusMode && (
         <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto">
           <ToolbarPill label="Ask AI" shortcut="⌘⇧A" onClick={onFocusAsk} />
-          <ToolbarPill label="Transcript" shortcut="⌘⇧T" active={transcriptVisible} onClick={onToggleTranscript} />
           <ToolbarPill label={isPaused ? "Resume" : "Pause"} shortcut="⌘⇧P" active={isPaused} onClick={onTogglePause} />
         </div>
       )}
 
       <div className="ml-auto flex shrink-0 items-center gap-1">
+        {/* Lives here (not the pill row above) specifically so it's still reachable
+            in Focus Mode — that row is hidden there, but you should still be able
+            to check the transcript regardless of which mode you're in. */}
+        <ToolbarIconButton title={transcriptVisible ? "Hide transcript (⌘⇧T)" : "Show transcript (⌘⇧T)"} active={transcriptVisible} onClick={onToggleTranscript}>
+          ☰
+        </ToolbarIconButton>
         <ToolbarIconButton title={presentationActive ? "Exit presentation mode" : "Presentation mode (⌘⇧H)"} active={presentationActive} onClick={onTogglePresentation}>
           ▤
         </ToolbarIconButton>
