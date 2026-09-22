@@ -185,12 +185,48 @@ export function FloatingAssistant(props: FloatingAssistantProps) {
     }
   }
 
+  // Every response (auto-detected or manual) with its question text (if
+  // any), oldest first — the sequence Focus Mode's ⌘←/⌘→ steps through.
+  const focusFeedItems = useMemo(() => {
+    const items = props.responses.map((r) => ({
+      id: r.id,
+      payload: r.payload,
+      questionText: r.questionId ? props.questions.find((q) => q.id === r.questionId)?.question : undefined,
+      receivedAt: r.receivedAt,
+    }));
+    items.sort((a, b) => a.receivedAt - b.receivedAt);
+    return items;
+  }, [props.responses, props.questions]);
+
+  // null = pinned to the latest item (auto-advances as new answers arrive,
+  // same "don't fight the user, but snap back once they're caught up"
+  // pattern as the transcript's auto-scroll). Set to a real index only
+  // while the user has manually stepped back with ⌘←.
+  const [focusIndex, setFocusIndex] = useState<number | null>(null);
+  const clampedFocusIndex = focusIndex === null ? focusFeedItems.length - 1 : Math.min(focusIndex, focusFeedItems.length - 1);
+  const latestFeedItem = focusFeedItems[clampedFocusIndex] ?? null;
+
+  function navigateFocus(delta: number) {
+    if (focusFeedItems.length === 0) return;
+    const next = Math.max(0, Math.min(focusFeedItems.length - 1, clampedFocusIndex + delta));
+    setFocusIndex(next === focusFeedItems.length - 1 ? null : next);
+  }
+
   // Global keyboard shortcuts for the floating panel itself (page-scoped —
   // only active while this window/tab has focus).
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape" && !prefs.collapsed) {
         update({ collapsed: true });
+        return;
+      }
+      // Focus Mode history nav (⌘←/⌘→, no Shift — matches the reference).
+      // Only meaningful in Focus Mode, which also happens to be the one
+      // state where the Ask AI textarea isn't mounted, so there's nothing
+      // else on this page for the arrow keys to conflict with.
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && prefs.focusMode && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+        e.preventDefault();
+        navigateFocus(e.key === "ArrowLeft" ? -1 : 1);
         return;
       }
       if (!(e.metaKey || e.ctrlKey) || !e.shiftKey) return;
@@ -215,7 +251,7 @@ export function FloatingAssistant(props: FloatingAssistantProps) {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [prefs.collapsed, prefs.transcriptVisible]);
+  }, [prefs.collapsed, prefs.transcriptVisible, prefs.focusMode, clampedFocusIndex, focusFeedItems.length]);
 
   // Same actions, triggered by the desktop shell's OS-level global
   // shortcuts (work even when another app has focus — see electron/main.js).
@@ -232,24 +268,6 @@ export function FloatingAssistant(props: FloatingAssistantProps) {
     () => [...props.responses].filter((r) => r.questionId === null).reverse(),
     [props.responses]
   );
-  const latestFeedItem = useMemo(() => {
-    // Most recent item across both detected-question answers and manual asks.
-    const latestManual = manualResponses[0];
-    const latestQuestion = orderedQuestions[0];
-    const latestQuestionResponse = latestQuestion ? props.responses.find((r) => r.questionId === latestQuestion.id) : undefined;
-    if (latestManual && (!latestQuestionResponse || props.responses.indexOf(latestManual) > props.responses.indexOf(latestQuestionResponse))) {
-      return { id: latestManual.id, payload: latestManual.payload, questionText: undefined, receivedAt: latestManual.receivedAt };
-    }
-    if (latestQuestionResponse) {
-      return {
-        id: latestQuestionResponse.id,
-        payload: latestQuestionResponse.payload,
-        questionText: latestQuestion?.question,
-        receivedAt: latestQuestionResponse.receivedAt,
-      };
-    }
-    return null;
-  }, [manualResponses, orderedQuestions, props.responses]);
 
   if (!loaded) return null;
 
@@ -395,6 +413,7 @@ export function FloatingAssistant(props: FloatingAssistantProps) {
           visible={prefs.transcriptVisible}
           speakerTag={props.speakerTag}
           onToggleSpeakerTag={props.onToggleSpeakerTag}
+          onAskAbout={props.onAsk}
         />
 
         <div className={`flex-1 overflow-y-auto ${bodyPadding}`} style={{ fontSize }}>
@@ -408,14 +427,43 @@ export function FloatingAssistant(props: FloatingAssistantProps) {
             </div>
           ) : prefs.focusMode ? (
             latestFeedItem ? (
-              <ResponseCard
-                questionText={latestFeedItem.questionText}
-                payload={latestFeedItem.payload}
-                receivedAt={latestFeedItem.receivedAt}
-                onQuickAction={props.onAsk}
-                feedback={feedbackFor(latestFeedItem.id)}
-                onFeedback={(next) => setFeedbackFor(latestFeedItem.id, next)}
-              />
+              <div className="flex flex-col gap-2.5">
+                {focusFeedItems.length > 1 && (
+                  <div className="flex items-center justify-between text-[0.72em] text-[var(--panel-muted)]">
+                    <button
+                      type="button"
+                      onClick={() => navigateFocus(-1)}
+                      disabled={clampedFocusIndex === 0}
+                      title="Previous answer (⌘←)"
+                      aria-label="Previous answer"
+                      className="focus-ring rounded px-1.5 py-0.5 font-mono hover:text-[var(--panel-fg)] disabled:opacity-30"
+                    >
+                      ⌘←
+                    </button>
+                    <span>
+                      {clampedFocusIndex + 1} / {focusFeedItems.length}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => navigateFocus(1)}
+                      disabled={clampedFocusIndex === focusFeedItems.length - 1}
+                      title="Next answer (⌘→)"
+                      aria-label="Next answer"
+                      className="focus-ring rounded px-1.5 py-0.5 font-mono hover:text-[var(--panel-fg)] disabled:opacity-30"
+                    >
+                      ⌘→
+                    </button>
+                  </div>
+                )}
+                <ResponseCard
+                  questionText={latestFeedItem.questionText}
+                  payload={latestFeedItem.payload}
+                  receivedAt={latestFeedItem.receivedAt}
+                  onQuickAction={props.onAsk}
+                  feedback={feedbackFor(latestFeedItem.id)}
+                  onFeedback={(next) => setFeedbackFor(latestFeedItem.id, next)}
+                />
+              </div>
             ) : (
               <p className="text-[0.85em] text-[var(--panel-muted)]">Listening for relevant questions…</p>
             )
