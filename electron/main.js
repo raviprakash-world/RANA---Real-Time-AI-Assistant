@@ -1,31 +1,44 @@
-const { app, BrowserWindow, globalShortcut, Menu, Tray, screen, shell, ipcMain, nativeImage } = require("electron");
+const {
+  app,
+  BrowserWindow,
+  globalShortcut,
+  Menu,
+  Tray,
+  screen,
+  shell,
+  ipcMain,
+  nativeImage,
+} = require("electron");
+
 const path = require("node:path");
 
 /**
- * Desktop shell for Real-Time Assistant — a private, compact, desktop-native
- * HUD for the live-session assistant, plus a normal launcher window for the
- * dashboard/history/settings/new-session flows. No application logic lives
- * here: this file only manages windows, global shortcuts, the tray, and
- * multi-monitor recovery. All session/AI/SSE logic stays in the existing
- * Next.js app — this shell just hosts it (section 20: no duplicated engine).
+ * ============================================================================
+ * Real-Time Assistant — Electron Main Process
+ * ============================================================================
  *
- * IMPORTANT BOUNDARY: this shell does not attempt to hide the HUD window
- * from screen capture, recording, or monitoring software. It is a normal,
- * always-on-top desktop window — visible in the window list, Mission
- * Control/Alt-Tab, and any screen share or recording, exactly like any
- * other app. See README.md for the reasoning.
+ * Responsibilities:
+ * - Create/manage launcher and HUD windows
+ * - Apply OS-level content protection to every BrowserWindow
+ * - Manage tray + global shortcuts
+ * - Handle multi-monitor positioning
+ * - Bridge desktop actions to the renderer
  *
- * Two windows:
- *  - launcherWindow: normal (framed, opaque) window for dashboard/history/
- *    settings/new-session. Shown at startup.
- *  - hudWindow: frameless, transparent, always-on-top-capable window that
- *    hosts a single active session's floating panel. Created/shown when a
- *    session starts, hidden when it ends.
- *
- * Both load the same running Next.js app (RTA_URL, default
- * http://localhost:3000) — just different routes.
+ * IMPORTANT:
+ * The actual session/AI/SSE logic lives in the Next.js application.
+ * This process is only the desktop shell.
+ * ============================================================================
  */
-const TARGET_URL = process.env.RTA_URL || "http://localhost:3000";
+
+/**
+ * ============================================================================
+ * Configuration
+ * ============================================================================
+ */
+
+const TARGET_URL =
+  process.env.RTA_URL || "http://localhost:3000";
+
 const PRELOAD = path.join(__dirname, "preload.js");
 
 const SHORTCUTS = {
@@ -37,155 +50,460 @@ const SHORTCUTS = {
   "CommandOrControl+Shift+H": "toggle-presentation",
   "CommandOrControl+Shift+M": "move-to-secondary",
 };
-// Esc is deliberately NOT registered as a global (OS-wide) shortcut — Electron's
-// globalShortcut hijacks the key for every application on the system for as
-// long as this app is running, which would break Esc in Zoom, VS Code, the
-// browser, etc. It stays a page-scoped shortcut instead (only active while
-// the HUD window itself has focus) — see section 6's "handle conflicts
-// gracefully" and FloatingAssistant.tsx's local keydown handler.
+
+const END_DEBOUNCE_MS = 400;
+
+const PRESENTATION_SIZE = {
+  width: 160,
+  height: 56,
+};
+
+/**
+ * ============================================================================
+ * Application State
+ * ============================================================================
+ */
 
 let launcherWindow = null;
 let hudWindow = null;
 let tray = null;
+
 let clickThroughEnabled = false;
 let sessionActive = false;
 let currentHudSessionId = null;
+
+let pendingEndTimer = null;
+let presentationSavedBounds = null;
+
 app.isQuitting = false;
+
+/**
+ * ============================================================================
+ * SECURITY / CONTENT PROTECTION
+ * ============================================================================
+ *
+ * Centralized protection function.
+ *
+ * Electron's setContentProtection(true) asks the OS to prevent the window
+ * contents from appearing in supported screen-capture / screenshot paths.
+ *
+ * IMPORTANT:
+ * This is NOT a guarantee against every possible capture mechanism.
+ * OS-level protections vary by platform and capture technology.
+ *
+ * The window is also created hidden and only shown after ready-to-show.
+ * This avoids intentionally exposing an unprotected first frame.
+ * ============================================================================
+ */
+
+function protect(win) {
+  if (!win || win.isDestroyed()) {
+    return false;
+  }
+
+  try {
+    win.setContentProtection(true);
+
+    console.log(
+      `[desktop/security] Content protection enabled for window ${win.id}`
+    );
+
+    return true;
+  } catch (error) {
+    console.error(
+      `[desktop/security] Failed to enable content protection for window ${win.id}`,
+      error
+    );
+
+    return false;
+  }
+}
+
+/**
+ * Fail-closed for every BrowserWindow.
+ *
+ * This covers:
+ * - launcher
+ * - HUD
+ * - future popup windows
+ * - DevTools windows where applicable
+ * - windows created by third-party code inside this process
+ *
+ * The explicit protect() calls in the individual window factories remain
+ * intentionally present as defense-in-depth and to make the security
+ * requirement obvious at the creation site.
+ */
+app.on("browser-window-created", (_event, win) => {
+  protect(win);
+});
+
+/**
+ * ============================================================================
+ * Window Helpers
+ * ============================================================================
+ */
+
+/**
+ * Configure common secure BrowserWindow settings.
+ */
+function getSecureWebPreferences() {
+  return {
+    contextIsolation: true,
+    nodeIntegration: false,
+    sandbox: true,
+    preload: PRELOAD,
+
+    // Do not expose DevTools in packaged production builds.
+    devTools: !app.isPackaged,
+  };
+}
+
+/**
+ * Open external URLs in the system browser.
+ *
+ * Never allow arbitrary child BrowserWindows to be created by renderer
+ * navigation.
+ */
+function configureExternalNavigation(win) {
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    try {
+      shell.openExternal(url);
+    } catch (error) {
+      console.error(
+        "[desktop] Failed to open external URL:",
+        error
+      );
+    }
+
+    return {
+      action: "deny",
+    };
+  });
+}
+
+/**
+ * ============================================================================
+ * Launcher Window
+ * ============================================================================
+ */
 
 function createLauncherWindow() {
   const win = new BrowserWindow({
     width: 960,
     height: 720,
+
     minWidth: 640,
     minHeight: 480,
+
     title: "Real-Time Assistant",
+
     backgroundColor: "#0a0b0d",
-    webPreferences: { contextIsolation: true, nodeIntegration: false, preload: PRELOAD },
+
+    /**
+     * IMPORTANT:
+     * Keep hidden until content protection has been applied and Electron
+     * reports that the first frame is ready.
+     */
+    show: false,
+
+    webPreferences: getSecureWebPreferences(),
   });
-  win.loadURL(TARGET_URL);
-  win.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
-    return { action: "deny" };
+
+  /**
+   * Defense-in-depth.
+   *
+   * browser-window-created also invokes protect(), but explicitly doing it
+   * here documents the security requirement for this window.
+   */
+  protect(win);
+
+  configureExternalNavigation(win);
+
+  win.on("ready-to-show", () => {
+    if (!win.isDestroyed()) {
+      win.show();
+    }
   });
+
+  win.on("closed", () => {
+    if (launcherWindow === win) {
+      launcherWindow = null;
+    }
+  });
+
   win.on("close", (event) => {
     if (!app.isQuitting) {
       event.preventDefault();
       win.hide();
     }
   });
+
+  win.loadURL(TARGET_URL);
+
   return win;
 }
 
-/** Keeps `bounds` fully within some connected display's work area (section 14/15). */
-function clampToDisplays(bounds) {
-  const displays = screen.getAllDisplays();
-  const center = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
-  const onScreen = displays.some((d) => {
-    const a = d.workArea;
-    return center.x >= a.x && center.x <= a.x + a.width && center.y >= a.y && center.y <= a.y + a.height;
-  });
-  if (onScreen) return bounds;
-
-  const primary = screen.getPrimaryDisplay().workArea;
-  const width = Math.min(bounds.width, primary.width - 32);
-  const height = Math.min(bounds.height, primary.height - 32);
-  return { x: primary.x + primary.width - width - 16, y: primary.y + 16, width, height };
-}
-
-let presentationSavedBounds = null;
-const PRESENTATION_SIZE = { width: 160, height: 56 };
+/**
+ ============================================================================
+ * Display / Bounds Helpers
+ * ============================================================================
+ */
 
 /**
- * Picks where the compact indicator should sit for the requested display
- * choice (section 6/13 of the presentation-mode spec) — top-right corner
- * of whichever display is chosen, never inspecting or altering any other
- * application's window.
+ * Keeps bounds fully inside at least one connected display.
  */
+function clampToDisplays(bounds) {
+  const displays = screen.getAllDisplays();
+
+  if (!displays.length) {
+    return bounds;
+  }
+
+  const center = {
+    x: bounds.x + bounds.width / 2,
+    y: bounds.y + bounds.height / 2,
+  };
+
+  const onScreen = displays.some((display) => {
+    const area = display.workArea;
+
+    return (
+      center.x >= area.x &&
+      center.x <= area.x + area.width &&
+      center.y >= area.y &&
+      center.y <= area.y + area.height
+    );
+  });
+
+  if (onScreen) {
+    return bounds;
+  }
+
+  const primary = screen.getPrimaryDisplay().workArea;
+
+  const width = Math.min(
+    bounds.width,
+    Math.max(320, primary.width - 32)
+  );
+
+  const height = Math.min(
+    bounds.height,
+    Math.max(180, primary.height - 32)
+  );
+
+  return {
+    x: primary.x + primary.width - width - 16,
+    y: primary.y + 16,
+    width,
+    height,
+  };
+}
+
+/**
+ * ============================================================================
+ * Presentation Mode
+ * ============================================================================
+ */
+
 function computePresentationBounds(displayChoice) {
   const displays = screen.getAllDisplays();
   const primary = screen.getPrimaryDisplay();
-  const currentDisplay = hudWindow ? screen.getDisplayMatching(hudWindow.getBounds()) : primary;
+
+  const currentDisplay = hudWindow
+    ? screen.getDisplayMatching(hudWindow.getBounds())
+    : primary;
 
   let target = currentDisplay;
-  if (displayChoice === "secondary" || displayChoice === "auto") {
-    const other = displays.find((d) => d.id !== currentDisplay.id);
-    if (other) target = other;
-    else if (displayChoice === "secondary") {
-      console.warn("[desktop] Presentation display set to \"secondary\" but only one display is connected — staying on the current display.");
+
+  if (
+    displayChoice === "secondary" ||
+    displayChoice === "auto"
+  ) {
+    const other = displays.find(
+      (display) => display.id !== currentDisplay.id
+    );
+
+    if (other) {
+      target = other;
+    } else if (displayChoice === "secondary") {
+      console.warn(
+        '[desktop] Presentation display set to "secondary" but only one display is connected — staying on the current display.'
+      );
     }
   }
 
   const area = target.workArea;
+
   return {
-    x: Math.round(area.x + area.width - PRESENTATION_SIZE.width - 16),
+    x: Math.round(
+      area.x +
+        area.width -
+        PRESENTATION_SIZE.width -
+        16
+    ),
+
     y: Math.round(area.y + 16),
+
     width: PRESENTATION_SIZE.width,
     height: PRESENTATION_SIZE.height,
   };
 }
 
 /**
- * Moves the *existing* HUD window to another display, keeping its current
- * size and its relative position within the display's work area (so it
- * doesn't always jump to a fixed corner) — unlike Presentation Mode, this
- * never resizes or changes collapsed/focus state, it's just "put this
- * window over there." Falls back to the current display (with a console
- * warning) if no second display is connected.
+ * ============================================================================
+ * Move HUD Between Displays
+ * ============================================================================
  */
+
 function computeMoveBounds(displayChoice) {
   const displays = screen.getAllDisplays();
-  const currentDisplay = hudWindow ? screen.getDisplayMatching(hudWindow.getBounds()) : screen.getPrimaryDisplay();
+
+  const currentDisplay = hudWindow
+    ? screen.getDisplayMatching(hudWindow.getBounds())
+    : screen.getPrimaryDisplay();
 
   let target = currentDisplay;
-  if (displayChoice === "secondary" || displayChoice === "auto") {
-    const other = displays.find((d) => d.id !== currentDisplay.id);
-    if (other) target = other;
-    else if (displayChoice === "secondary") {
-      console.warn("[desktop] Move-to-secondary requested but only one display is connected — staying on the current display.");
+
+  if (
+    displayChoice === "secondary" ||
+    displayChoice === "auto"
+  ) {
+    const other = displays.find(
+      (display) => display.id !== currentDisplay.id
+    );
+
+    if (other) {
+      target = other;
+    } else if (displayChoice === "secondary") {
+      console.warn(
+        '[desktop] Move-to-secondary requested but only one display is connected — staying on the current display.'
+      );
     }
   }
 
+  if (!hudWindow || hudWindow.isDestroyed()) {
+    return target.workArea;
+  }
+
   const current = hudWindow.getBounds();
+
   const fromArea = currentDisplay.workArea;
   const toArea = target.workArea;
-  const width = Math.min(current.width, toArea.width);
-  const height = Math.min(current.height, toArea.height);
+
+  const width = Math.min(
+    current.width,
+    toArea.width
+  );
+
+  const height = Math.min(
+    current.height,
+    toArea.height
+  );
+
   const relX = current.x - fromArea.x;
   const relY = current.y - fromArea.y;
-  const x = Math.min(Math.max(toArea.x + relX, toArea.x), toArea.x + toArea.width - width);
-  const y = Math.min(Math.max(toArea.y + relY, toArea.y), toArea.y + toArea.height - height);
 
-  return { x: Math.round(x), y: Math.round(y), width: Math.round(width), height: Math.round(height) };
+  const x = Math.min(
+    Math.max(toArea.x + relX, toArea.x),
+    toArea.x + toArea.width - width
+  );
+
+  const y = Math.min(
+    Math.max(toArea.y + relY, toArea.y),
+    toArea.y + toArea.height - height
+  );
+
+  return {
+    x: Math.round(x),
+    y: Math.round(y),
+    width: Math.round(width),
+    height: Math.round(height),
+  };
 }
 
 function moveHudToSecondaryDisplay() {
-  if (!hudWindow || hudWindow.isDestroyed()) return;
-  hudWindow.setBounds(computeMoveBounds("secondary"));
+  if (!hudWindow || hudWindow.isDestroyed()) {
+    return;
+  }
+
+  hudWindow.setBounds(
+    computeMoveBounds("secondary")
+  );
 }
+
+/**
+ * ============================================================================
+ * HUD Window
+ * ============================================================================
+ */
 
 function createHudWindow(sessionId) {
   const win = new BrowserWindow({
     width: 420,
     height: 600,
+
     minWidth: 320,
     minHeight: 180,
+
     maxWidth: 700,
     maxHeight: 800,
+
     frame: false,
     transparent: true,
     hasShadow: true,
+
     alwaysOnTop: true,
     resizable: true,
+
     skipTaskbar: false,
+
     title: "Real-Time Assistant",
+
     backgroundColor: "#00000000",
-    webPreferences: { contextIsolation: true, nodeIntegration: false, preload: PRELOAD },
+
+    /**
+     * Security requirement:
+     * Never initially display the HUD before protection is applied.
+     */
+    show: false,
+
+    webPreferences: getSecureWebPreferences(),
   });
 
-  win.loadURL(`${TARGET_URL}/sessions/${sessionId}?hud=1`);
-  win.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
-    return { action: "deny" };
+  /**
+   * Defense-in-depth.
+   */
+  protect(win);
+
+  configureExternalNavigation(win);
+
+  win.webContents.on(
+    "did-fail-load",
+    (_event, errorCode, errorDescription) => {
+      console.error(
+        `[desktop] HUD failed to load: ${errorCode} ${errorDescription}`
+      );
+    }
+  );
+
+  win.on("ready-to-show", () => {
+    if (!win.isDestroyed()) {
+      win.show();
+    }
+  });
+
+  win.on("moved", () => {
+    reportBoundsIfInvalid(win);
+  });
+
+  win.on("closed", () => {
+    if (hudWindow === win) {
+      hudWindow = null;
+    }
+
+    if (currentHudSessionId === sessionId) {
+      currentHudSessionId = null;
+    }
   });
 
   win.on("close", (event) => {
@@ -195,243 +513,674 @@ function createHudWindow(sessionId) {
     }
   });
 
-  win.on("moved", () => reportBoundsIfInvalid(win));
+  win.loadURL(
+    `${TARGET_URL}/sessions/${sessionId}?hud=1`
+  );
 
   return win;
 }
 
-/** If the HUD ends up with its center off every connected display, snap it back (section 14/15). */
+/**
+ * ============================================================================
+ * Bounds Validation
+ * ============================================================================
+ */
+
 function reportBoundsIfInvalid(win) {
-  if (!win || win.isDestroyed()) return;
+  if (!win || win.isDestroyed()) {
+    return;
+  }
+
   const bounds = win.getBounds();
   const fixed = clampToDisplays(bounds);
-  if (fixed !== bounds) {
-    win.setBounds(fixed);
-    win.webContents.send("desktop:bounds-corrected", fixed);
+
+  const changed =
+    fixed.x !== bounds.x ||
+    fixed.y !== bounds.y ||
+    fixed.width !== bounds.width ||
+    fixed.height !== bounds.height;
+
+  if (!changed) {
+    return;
+  }
+
+  win.setBounds(fixed);
+
+  if (!win.webContents.isDestroyed()) {
+    win.webContents.send(
+      "desktop:bounds-corrected",
+      fixed
+    );
   }
 }
+
+/**
+ * ============================================================================
+ * HUD Visibility
+ * ============================================================================
+ */
 
 function toggleHudVisibility() {
-  if (!hudWindow) return;
-  if (hudWindow.isVisible() && !hudWindow.isMinimized()) {
-    hudWindow.hide();
-  } else {
-    hudWindow.show();
-    hudWindow.focus();
+  if (!hudWindow || hudWindow.isDestroyed()) {
+    return;
   }
+
+  if (
+    hudWindow.isVisible() &&
+    !hudWindow.isMinimized()
+  ) {
+    hudWindow.hide();
+    return;
+  }
+
+  hudWindow.show();
+  hudWindow.focus();
 }
 
+/**
+ * ============================================================================
+ * Renderer Shortcut Communication
+ * ============================================================================
+ */
+
 function sendShortcut(action) {
-  if (!hudWindow) return;
+  if (!hudWindow || hudWindow.isDestroyed()) {
+    return;
+  }
+
   if (action === "toggle-visibility") {
     toggleHudVisibility();
     return;
   }
+
   if (action === "toggle-click-through") {
     setClickThrough(!clickThroughEnabled);
     return;
   }
+
   if (action === "move-to-secondary") {
     moveHudToSecondaryDisplay();
     return;
   }
+
   if (!hudWindow.isVisible()) {
     hudWindow.show();
   }
-  hudWindow.webContents.send("desktop:shortcut", action);
+
+  if (!hudWindow.webContents.isDestroyed()) {
+    hudWindow.webContents.send(
+      "desktop:shortcut",
+      action
+    );
+  }
 }
 
+/**
+ * ============================================================================
+ * Click Through
+ * ============================================================================
+ */
+
 function setClickThrough(enabled) {
-  clickThroughEnabled = enabled;
-  hudWindow?.setIgnoreMouseEvents(enabled, { forward: true });
-  hudWindow?.webContents.send("desktop:click-through-changed", enabled);
+  clickThroughEnabled = Boolean(enabled);
+
+  if (hudWindow && !hudWindow.isDestroyed()) {
+    hudWindow.setIgnoreMouseEvents(
+      clickThroughEnabled,
+      {
+        forward: true,
+      }
+    );
+
+    if (!hudWindow.webContents.isDestroyed()) {
+      hudWindow.webContents.send(
+        "desktop:click-through-changed",
+        clickThroughEnabled
+      );
+    }
+  }
+
   updateTrayMenu();
 }
 
+/**
+ * ============================================================================
+ * Global Shortcuts
+ * ============================================================================
+ */
+
 function registerGlobalShortcuts() {
-  for (const [accelerator, action] of Object.entries(SHORTCUTS)) {
-    const ok = globalShortcut.register(accelerator, () => sendShortcut(action));
-    console.log(`[desktop] shortcut ${accelerator} (${action}) registered: ${ok}`);
-    if (!ok) {
-      console.warn(`[desktop] "${accelerator}" is already taken by another application — that shortcut won't work here.`);
+  for (const [
+    accelerator,
+    action,
+  ] of Object.entries(SHORTCUTS)) {
+    const registered = globalShortcut.register(
+      accelerator,
+      () => sendShortcut(action)
+    );
+
+    console.log(
+      `[desktop] shortcut ${accelerator} (${action}) registered: ${registered}`
+    );
+
+    if (!registered) {
+      console.warn(
+        `[desktop] "${accelerator}" is already taken by another application — that shortcut won't work here.`
+      );
     }
   }
 }
 
+/**
+ * ============================================================================
+ * Tray
+ * ============================================================================
+ */
+
 function updateTrayMenu() {
-  if (!tray) return;
+  if (!tray) {
+    return;
+  }
+
   const template = [
-    { label: "Real-Time Assistant", enabled: false },
-    { label: sessionActive ? "● Session Active" : "○ No Active Session", enabled: false },
-    { type: "separator" },
-    { label: "Show Assistant", enabled: sessionActive, click: () => toggleHudVisibility() },
-    { label: "Pause / Resume", enabled: sessionActive, click: () => sendShortcut("toggle-pause") },
-    { label: "End Session", enabled: sessionActive, click: () => sendShortcut("end-session") },
-    { type: "separator" },
     {
-      label: clickThroughEnabled ? "Disable Click-Through" : "Enable Click-Through",
-      enabled: sessionActive,
-      click: () => setClickThrough(!clickThroughEnabled),
+      label: "Real-Time Assistant",
+      enabled: false,
     },
-    { type: "separator" },
-    { label: "Open Dashboard", click: () => showLauncher("/") },
-    { label: "Settings", click: () => showLauncher("/settings") },
-    { type: "separator" },
+
+    {
+      label: sessionActive
+        ? "● Session Active"
+        : "○ No Active Session",
+      enabled: false,
+    },
+
+    {
+      type: "separator",
+    },
+
+    {
+      label: "Show Assistant",
+      enabled: sessionActive,
+      click: () => toggleHudVisibility(),
+    },
+
+    {
+      label: "Pause / Resume",
+      enabled: sessionActive,
+      click: () =>
+        sendShortcut("toggle-pause"),
+    },
+
+    {
+      label: "End Session",
+      enabled: sessionActive,
+      click: () =>
+        sendShortcut("end-session"),
+    },
+
+    {
+      type: "separator",
+    },
+
+    {
+      label: clickThroughEnabled
+        ? "Disable Click-Through"
+        : "Enable Click-Through",
+
+      enabled: sessionActive,
+
+      click: () =>
+        setClickThrough(
+          !clickThroughEnabled
+        ),
+    },
+
+    {
+      type: "separator",
+    },
+
+    {
+      label: "Open Dashboard",
+      click: () =>
+        showLauncher("/"),
+    },
+
+    {
+      label: "Settings",
+      click: () =>
+        showLauncher("/settings"),
+    },
+
+    {
+      type: "separator",
+    },
+
     {
       label: "Quit",
+
       click: () => {
         app.isQuitting = true;
         app.quit();
       },
     },
   ];
-  tray.setContextMenu(Menu.buildFromTemplate(template));
+
+  tray.setContextMenu(
+    Menu.buildFromTemplate(template)
+  );
 }
 
 function createTray() {
-  // A 1x1 transparent placeholder — macOS renders the title text set below
-  // instead of relying on icon art (avoids needing to ship an icon asset).
-  // On Windows/Linux the tray entry will show without a custom icon.
+  /**
+   * Transparent placeholder icon.
+   */
   const icon = nativeImage.createEmpty();
+
   tray = new Tray(icon);
-  if (process.platform === "darwin") tray.setTitle("●");
+
+  if (process.platform === "darwin") {
+    tray.setTitle("●");
+  }
+
   tray.setToolTip("Real-Time Assistant");
-  tray.on("click", () => (sessionActive ? toggleHudVisibility() : showLauncher("/")));
+
+  tray.on("click", () => {
+    if (sessionActive) {
+      toggleHudVisibility();
+    } else {
+      showLauncher("/");
+    }
+  });
+
   updateTrayMenu();
 }
 
-function showLauncher(path) {
-  if (!launcherWindow || launcherWindow.isDestroyed()) launcherWindow = createLauncherWindow();
-  const targetUrl = path ? `${TARGET_URL}${path}` : null;
-  if (targetUrl && launcherWindow.webContents.getURL() !== targetUrl) {
+/**
+ * ============================================================================
+ * Launcher Navigation
+ * ============================================================================
+ */
+
+function showLauncher(route = "/") {
+  if (
+    !launcherWindow ||
+    launcherWindow.isDestroyed()
+  ) {
+    launcherWindow =
+      createLauncherWindow();
+  }
+
+  const targetUrl =
+    `${TARGET_URL}${route || "/"}`;
+
+  if (
+    launcherWindow.webContents.getURL() !==
+    targetUrl
+  ) {
     launcherWindow.loadURL(targetUrl);
   }
+
   launcherWindow.show();
   launcherWindow.focus();
 }
 
-// ---- IPC from the renderer ----
+/**
+ * ============================================================================
+ * Session Lifecycle
+ * ============================================================================
+ *
+ * React can mount/unmount/remount during development and full page reloads.
+ *
+ * Therefore:
+ *
+ * session-ended
+ *      ↓
+ * debounce
+ *      ↓
+ * session-started arrives?
+ *      ↓
+ * cancel end
+ *
+ * This prevents reload/remount loops.
+ * ============================================================================
+ */
 
-// The session page's mount effect fires notify-started on every mount and
-// notify-ended on every unmount — including the mount/cleanup/remount dance
-// React itself does in dev mode, and (more importantly) the remount that
-// naturally follows any full page (re)load of the HUD window. Acting on
-// "ended" immediately, followed by "started" reloading the window, was a
-// real bug: each reload re-triggered the same mount/unmount pair, which
-// reloaded again, forever (confirmed live — see chat). Debouncing "ended"
-// so an immediate same-session "started" cancels it fixes this at the root,
-// and still hides the HUD promptly on a real end-session (nothing re-starts
-// the same session right after that).
-let pendingEndTimer = null;
-const END_DEBOUNCE_MS = 400;
+ipcMain.on(
+  "desktop:session-started",
+  (_event, sessionId) => {
+    if (pendingEndTimer) {
+      clearTimeout(pendingEndTimer);
+      pendingEndTimer = null;
+    }
 
-ipcMain.on("desktop:session-started", (_event, sessionId) => {
-  if (pendingEndTimer) {
-    clearTimeout(pendingEndTimer);
-    pendingEndTimer = null;
-  }
-  sessionActive = true;
+    sessionActive = true;
 
-  if (currentHudSessionId === sessionId && hudWindow && !hudWindow.isDestroyed()) {
-    hudWindow.show();
+    if (
+      currentHudSessionId === sessionId &&
+      hudWindow &&
+      !hudWindow.isDestroyed()
+    ) {
+      hudWindow.show();
+
+      launcherWindow?.hide();
+
+      updateTrayMenu();
+
+      return;
+    }
+
+    currentHudSessionId = sessionId;
+
+    if (
+      !hudWindow ||
+      hudWindow.isDestroyed()
+    ) {
+      hudWindow =
+        createHudWindow(sessionId);
+    } else {
+      /**
+       * Content protection remains enabled on the existing BrowserWindow
+       * across navigation.
+       */
+      protect(hudWindow);
+
+      hudWindow.loadURL(
+        `${TARGET_URL}/sessions/${sessionId}?hud=1`
+      );
+
+      /**
+       * Do not wait for ready-to-show here if the window was already
+       * previously shown and protected.
+       */
+      hudWindow.show();
+    }
+
     launcherWindow?.hide();
-    return;
-  }
-  currentHudSessionId = sessionId;
 
-  if (!hudWindow || hudWindow.isDestroyed()) {
-    hudWindow = createHudWindow(sessionId);
-  } else {
-    hudWindow.loadURL(`${TARGET_URL}/sessions/${sessionId}?hud=1`);
-    hudWindow.show();
-  }
-  launcherWindow?.hide();
-  updateTrayMenu();
-});
-
-ipcMain.on("desktop:session-ended", () => {
-  if (pendingEndTimer) clearTimeout(pendingEndTimer);
-  pendingEndTimer = setTimeout(() => {
-    pendingEndTimer = null;
-    sessionActive = false;
-    currentHudSessionId = null;
-    hudWindow?.hide();
-    setClickThrough(false);
-    showLauncher("/");
     updateTrayMenu();
-  }, END_DEBOUNCE_MS);
-});
-
-ipcMain.on("desktop:report-bounds", (_event, bounds) => {
-  if (!hudWindow || hudWindow.isDestroyed()) return;
-  const fixed = clampToDisplays({ ...hudWindow.getBounds(), ...bounds });
-  hudWindow.setBounds({
-    x: Math.round(fixed.x),
-    y: Math.round(fixed.y),
-    width: Math.round(fixed.width),
-    height: Math.round(fixed.height),
-  });
-});
-
-ipcMain.on("desktop:set-always-on-top", (_event, enabled) => {
-  hudWindow?.setAlwaysOnTop(Boolean(enabled));
-});
-
-ipcMain.on("desktop:toggle-click-through", () => setClickThrough(!clickThroughEnabled));
-
-ipcMain.handle("desktop:get-displays", () => {
-  const primaryId = screen.getPrimaryDisplay().id;
-  return screen.getAllDisplays().map((d, i) => ({
-    id: d.id,
-    label: d.id === primaryId ? "Primary display" : `Display ${i + 1}`,
-    bounds: d.bounds,
-    isPrimary: d.id === primaryId,
-  }));
-});
-
-// Presentation Mode (section 6/7/11): moves the *existing* HUD window to a
-// small corner of the requested display and back — never a second window,
-// never anything that changes what's visible to screen-share recipients.
-// The renderer owns collapsed/focusMode state; this only moves the OS
-// window bounds to match.
-ipcMain.on("desktop:set-presentation-mode", (_event, { enabled, display }) => {
-  if (!hudWindow || hudWindow.isDestroyed()) return;
-  if (enabled) {
-    presentationSavedBounds = hudWindow.getBounds();
-    hudWindow.setBounds(computePresentationBounds(display));
-  } else if (presentationSavedBounds) {
-    hudWindow.setBounds(clampToDisplays(presentationSavedBounds));
-    presentationSavedBounds = null;
   }
-});
+);
 
-ipcMain.on("desktop:move-to-secondary", () => moveHudToSecondaryDisplay());
+ipcMain.on(
+  "desktop:session-ended",
+  () => {
+    if (pendingEndTimer) {
+      clearTimeout(pendingEndTimer);
+    }
 
-ipcMain.on("desktop:reset-position", () => {
-  if (!hudWindow || hudWindow.isDestroyed()) return;
-  const primary = screen.getPrimaryDisplay().workArea;
-  const bounds = { x: primary.x + primary.width - 420 - 16, y: primary.y + 16, width: 420, height: 600 };
-  hudWindow.setBounds(bounds);
-  hudWindow.webContents.send("desktop:bounds-corrected", bounds);
-});
+    pendingEndTimer = setTimeout(() => {
+      pendingEndTimer = null;
+
+      sessionActive = false;
+      currentHudSessionId = null;
+
+      if (
+        hudWindow &&
+        !hudWindow.isDestroyed()
+      ) {
+        hudWindow.hide();
+      }
+
+      setClickThrough(false);
+
+      showLauncher("/");
+
+      updateTrayMenu();
+    }, END_DEBOUNCE_MS);
+  }
+);
+
+/**
+ * ============================================================================
+ * Bounds IPC
+ * ============================================================================
+ */
+
+ipcMain.on(
+  "desktop:report-bounds",
+  (_event, bounds) => {
+    if (
+      !hudWindow ||
+      hudWindow.isDestroyed() ||
+      !bounds
+    ) {
+      return;
+    }
+
+    const currentBounds =
+      hudWindow.getBounds();
+
+    const requestedBounds = {
+      ...currentBounds,
+      ...bounds,
+    };
+
+    const fixed =
+      clampToDisplays(requestedBounds);
+
+    hudWindow.setBounds({
+      x: Math.round(fixed.x),
+      y: Math.round(fixed.y),
+      width: Math.round(fixed.width),
+      height: Math.round(fixed.height),
+    });
+  }
+);
+
+/**
+ * ============================================================================
+ * Always On Top
+ * ============================================================================
+ */
+
+ipcMain.on(
+  "desktop:set-always-on-top",
+  (_event, enabled) => {
+    if (
+      !hudWindow ||
+      hudWindow.isDestroyed()
+    ) {
+      return;
+    }
+
+    hudWindow.setAlwaysOnTop(
+      Boolean(enabled)
+    );
+  }
+);
+
+/**
+ * ============================================================================
+ * Click Through IPC
+ * ============================================================================
+ */
+
+ipcMain.on(
+  "desktop:toggle-click-through",
+  () => {
+    setClickThrough(
+      !clickThroughEnabled
+    );
+  }
+);
+
+/**
+ * ============================================================================
+ * Display Information
+ * ============================================================================
+ */
+
+ipcMain.handle(
+  "desktop:get-displays",
+  () => {
+    const primaryId =
+      screen.getPrimaryDisplay().id;
+
+    return screen
+      .getAllDisplays()
+      .map((display, index) => ({
+        id: display.id,
+
+        label:
+          display.id === primaryId
+            ? "Primary display"
+            : `Display ${index + 1}`,
+
+        bounds: display.bounds,
+
+        isPrimary:
+          display.id === primaryId,
+      }));
+  }
+);
+
+/**
+ * ============================================================================
+ * Presentation Mode IPC
+ * ============================================================================
+ *
+ * Presentation mode only changes the existing HUD window's bounds.
+ * No second window is created.
+ * ============================================================================
+ */
+
+ipcMain.on(
+  "desktop:set-presentation-mode",
+  (_event, { enabled, display }) => {
+    if (
+      !hudWindow ||
+      hudWindow.isDestroyed()
+    ) {
+      return;
+    }
+
+    if (enabled) {
+      presentationSavedBounds =
+        hudWindow.getBounds();
+
+      hudWindow.setBounds(
+        computePresentationBounds(
+          display
+        )
+      );
+
+      return;
+    }
+
+    if (presentationSavedBounds) {
+      hudWindow.setBounds(
+        clampToDisplays(
+          presentationSavedBounds
+        )
+      );
+
+      presentationSavedBounds = null;
+    }
+  }
+);
+
+/**
+ * ============================================================================
+ * Move To Secondary Display
+ * ============================================================================
+ */
+
+ipcMain.on(
+  "desktop:move-to-secondary",
+  () => {
+    moveHudToSecondaryDisplay();
+  }
+);
+
+/**
+ * ============================================================================
+ * Reset HUD Position
+ * ============================================================================
+ */
+
+ipcMain.on(
+  "desktop:reset-position",
+  () => {
+    if (
+      !hudWindow ||
+      hudWindow.isDestroyed()
+    ) {
+      return;
+    }
+
+    const primary =
+      screen.getPrimaryDisplay().workArea;
+
+    const bounds = {
+      x:
+        primary.x +
+        primary.width -
+        420 -
+        16,
+
+      y:
+        primary.y + 16,
+
+      width: 420,
+      height: 600,
+    };
+
+    hudWindow.setBounds(bounds);
+
+    if (!hudWindow.webContents.isDestroyed()) {
+      hudWindow.webContents.send(
+        "desktop:bounds-corrected",
+        bounds
+      );
+    }
+  }
+);
+
+/**
+ * ============================================================================
+ * Application Startup
+ * ============================================================================
+ */
 
 app.whenReady().then(() => {
-  console.log(`[desktop] ready, launcher loading ${TARGET_URL}`);
-  launcherWindow = createLauncherWindow();
+  console.log(
+    `[desktop] ready, launcher loading ${TARGET_URL}`
+  );
+
+  launcherWindow =
+    createLauncherWindow();
+
   createTray();
+
   registerGlobalShortcuts();
 
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      launcherWindow = createLauncherWindow();
+    if (
+      BrowserWindow.getAllWindows()
+        .length === 0
+    ) {
+      launcherWindow =
+        createLauncherWindow();
     } else {
-      showLauncher();
+      showLauncher("/");
     }
   });
 });
 
+/**
+ * ============================================================================
+ * Application Shutdown
+ * ============================================================================
+ */
+
 app.on("before-quit", () => {
   app.isQuitting = true;
+
+  if (pendingEndTimer) {
+    clearTimeout(pendingEndTimer);
+    pendingEndTimer = null;
+  }
 });
 
 app.on("will-quit", () => {
@@ -439,5 +1188,7 @@ app.on("will-quit", () => {
 });
 
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
+  if (process.platform !== "darwin") {
+    app.quit();
+  }
 });

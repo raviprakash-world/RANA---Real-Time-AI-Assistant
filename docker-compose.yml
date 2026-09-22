@@ -1,3 +1,6 @@
+name: claudefolder # pinned: compose project name defaults to the folder name, so renaming the
+# folder (as happened once already) would spin up a second empty db/volume
+# instead of reusing the real one. Keep this pinned to whatever it already is.
 services:
   db:
     image: postgres:16-alpine
