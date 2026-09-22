@@ -34,20 +34,30 @@ export async function* generateResponse(params: {
   questionText: string;
   context: PromptContext;
   manualInstruction?: string;
+  /** Data URL (data:image/png;base64,...) of a screenshot to analyze, e.g. a coding problem shared from a meeting. */
+  imageDataUrl?: string;
   signal?: AbortSignal;
 }): AsyncGenerator<ResponseGenerationEvent, void, unknown> {
   const provider = getLLMProvider();
-  const taskHint: TaskHint = params.manualInstruction ? "manual" : TASK_HINT_BY_TYPE[params.questionType];
+  const taskHint: TaskHint = params.imageDataUrl ? "coding" : params.manualInstruction ? "manual" : TASK_HINT_BY_TYPE[params.questionType];
+
+  const taskText = answerGenerationTaskPrompt({
+    questionType: params.questionType,
+    questionText: params.questionText,
+    manualInstruction: params.manualInstruction,
+    hasImage: !!params.imageDataUrl,
+  });
 
   const messages = [
     { role: "system" as const, content: getSystemPrompt(params.context) },
     {
       role: "user" as const,
-      content: answerGenerationTaskPrompt({
-        questionType: params.questionType,
-        questionText: params.questionText,
-        manualInstruction: params.manualInstruction,
-      }),
+      content: params.imageDataUrl
+        ? [
+            { type: "text" as const, text: taskText },
+            { type: "image_url" as const, image_url: { url: params.imageDataUrl } },
+          ]
+        : taskText,
     },
   ];
 

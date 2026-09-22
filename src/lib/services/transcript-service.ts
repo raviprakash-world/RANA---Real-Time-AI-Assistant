@@ -180,7 +180,13 @@ async function runDetectionAndRespond(sessionId: string, chunk: string) {
  */
 export async function streamAndPersistResponse(
   sessionId: string,
-  params: { questionId: string | null; questionType: import("@/lib/ai/schemas").QuestionType; questionText: string; manualInstruction?: string }
+  params: {
+    questionId: string | null;
+    questionType: import("@/lib/ai/schemas").QuestionType;
+    questionText: string;
+    manualInstruction?: string;
+    imageDataUrl?: string;
+  }
 ) {
   const state = getRuntime(sessionId);
   state.abortController?.abort();
@@ -198,6 +204,7 @@ export async function streamAndPersistResponse(
     questionText: params.questionText,
     context,
     manualInstruction: params.manualInstruction,
+    imageDataUrl: params.imageDataUrl,
     signal: abortController.signal,
   })) {
     if (state.generationSeq !== mySeq) return; // superseded by a newer generation

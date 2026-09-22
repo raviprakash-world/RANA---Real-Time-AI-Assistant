@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LiveQuestion, LiveResponse, LiveTranscriptSegment } from "@/hooks/useSessionEvents";
 import { useDraggable } from "@/hooks/useDraggable";
 import { useResizable } from "@/hooks/useResizable";
@@ -25,6 +25,8 @@ import {
   FLOATING_MAX_WIDTH,
   FLOATING_MIN_HEIGHT,
   FLOATING_MIN_WIDTH,
+  HUD_SCALE_MAX,
+  HUD_SCALE_MIN,
 } from "@/lib/floating/types";
 
 const FONT_SIZE_PX: Record<string, number> = { small: 12, medium: 13.5, large: 15.5 };
@@ -57,6 +59,8 @@ export interface FloatingAssistantProps {
   onTogglePause: () => void;
   onEnd: () => void;
   onAsk: (instruction: string) => void;
+  /** Captures the screen and asks the AI to solve whatever coding problem is on it. Desktop-only (see AssistantHeader's `desktop` prop). */
+  onScreenshot: () => Promise<void>;
   onClearHistory: () => Promise<void>;
   attachedContext: AttachedContextItem[];
   onAddContext: (entry: { kind: "IDE" | "BROWSER" | "TERMINAL" | "SCREEN" | "OTHER"; label: string; text: string }) => Promise<void>;
@@ -167,7 +171,14 @@ export function FloatingAssistant(props: FloatingAssistantProps) {
   // OS-level global shortcuts routed in via the desktop shell (section 6) —
   // one action table, two triggers, no duplicated behavior.
   function runShortcutAction(
-    action: "toggle-visibility" | "focus-ask" | "toggle-pause" | "toggle-transcript" | "end-session" | "toggle-presentation"
+    action:
+      | "toggle-visibility"
+      | "focus-ask"
+      | "toggle-pause"
+      | "toggle-transcript"
+      | "end-session"
+      | "toggle-presentation"
+      | "toggle-focus"
   ) {
     if (action === "toggle-visibility") {
       update({ collapsed: !prefs.collapsed });
@@ -182,6 +193,8 @@ export function FloatingAssistant(props: FloatingAssistantProps) {
       props.onEnd();
     } else if (action === "toggle-presentation") {
       togglePresentationMode();
+    } else if (action === "toggle-focus") {
+      update({ focusMode: !prefs.focusMode });
     }
   }
 
@@ -221,9 +234,8 @@ export function FloatingAssistant(props: FloatingAssistantProps) {
         return;
       }
       // Focus Mode history nav (⌘←/⌘→, no Shift — matches the reference).
-      // Only meaningful in Focus Mode, which also happens to be the one
-      // state where the Ask AI textarea isn't mounted, so there's nothing
-      // else on this page for the arrow keys to conflict with.
+      // Only meaningful in Focus Mode; harmless no-op otherwise since
+      // navigateFocus bails when there's nothing to navigate through.
       if ((e.metaKey || e.ctrlKey) && !e.shiftKey && prefs.focusMode && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
         e.preventDefault();
         navigateFocus(e.key === "ArrowLeft" ? -1 : 1);
@@ -246,6 +258,9 @@ export function FloatingAssistant(props: FloatingAssistantProps) {
       } else if (key === "h") {
         e.preventDefault();
         runShortcutAction("toggle-presentation");
+      } else if (key === "f") {
+        e.preventDefault();
+        runShortcutAction("toggle-focus");
       }
     }
     window.addEventListener("keydown", onKeyDown);
@@ -263,11 +278,36 @@ export function FloatingAssistant(props: FloatingAssistantProps) {
   const [clickThroughActive, setClickThroughActive] = useState(false);
   useDesktopClickThroughState(setClickThroughActive);
 
+  // Local busy flag just covers the capture+upload round-trip (the actual
+  // answer streams back over SSE same as any other question, no busy state
+  // needed for that part) — gives the button immediate feedback that the
+  // click registered instead of appearing to do nothing for a second or two.
+  const [screenshotBusy, setScreenshotBusy] = useState(false);
+  const handleCaptureScreenshot = useCallback(async () => {
+    if (screenshotBusy) return;
+    setScreenshotBusy(true);
+    try {
+      await props.onScreenshot();
+    } finally {
+      setScreenshotBusy(false);
+    }
+  }, [screenshotBusy, props]);
+
   const orderedQuestions = useMemo(() => [...props.questions].reverse(), [props.questions]);
   const manualResponses = useMemo(
     () => [...props.responses].filter((r) => r.questionId === null).reverse(),
     [props.responses]
   );
+
+  // Auto-detection/auto-answer is skipped server-side while paused (see
+  // runDetectionAndRespond in transcript-service.ts) — but transcript
+  // capture keeps running, so without this the idle state looked identical
+  // whether paused or active, with no cue that automatic answers had
+  // silently stopped. The manual "Ask" (per transcript line, or the input
+  // box) still works regardless of pause.
+  const idleMessage = props.isPaused
+    ? "Paused — resume to get automatic answers (or use Ask for a manual one)."
+    : "Listening for relevant questions…";
 
   if (!loaded) return null;
 
@@ -326,7 +366,7 @@ export function FloatingAssistant(props: FloatingAssistantProps) {
       ref={panelRef as React.Ref<HTMLDivElement>}
       data-panel-theme={resolvedTheme}
       data-click-through={clickThroughActive || undefined}
-      className="floating-panel floating-panel-enter fixed z-50 flex flex-col gap-2"
+      className="floating-panel floating-panel-enter fixed z-50"
       style={{
         ...floatingContainerStyle(prefs),
         minWidth: FLOATING_MIN_WIDTH,
@@ -335,7 +375,23 @@ export function FloatingAssistant(props: FloatingAssistantProps) {
         maxHeight: FLOATING_MAX_HEIGHT,
       }}
     >
-      <AssistantHeader
+      {/*
+        HUD Scale lives here, on an inner wrapper — never on the outer box
+        above. That outer div is what useDraggable/useResizable read via
+        panelRef.getBoundingClientRect() and is sized to the real,
+        user-chosen prefs.width/height; CSS `zoom` changes an element's
+        rendered size as perceived by *its own* layout, so applying it to
+        the draggable/resizable box itself would desync drag/resize from
+        the pointer (e.g. resize growing 1.5x faster than the mouse at 150%
+        scale). Zooming only this inner content wrapper scales text/icons/
+        spacing/controls without the window's actual pixel size ever
+        changing or the resize math ever seeing zoomed coordinates.
+      */}
+      <div
+        className="flex h-full w-full flex-col gap-2"
+        style={{ zoom: Math.max(HUD_SCALE_MIN, Math.min(HUD_SCALE_MAX, prefs.hudScale)) / 100 }}
+      >
+        <AssistantHeader
         mode={props.mode}
         status={props.status}
         contextCount={props.attachedContext.length}
@@ -368,6 +424,8 @@ export function FloatingAssistant(props: FloatingAssistantProps) {
                 clickThroughActive,
                 onToggleClickThrough: () => getDesktopShell()?.toggleClickThrough(),
                 onMoveToSecondary: () => getDesktopShell()?.moveToSecondaryDisplay(),
+                onCaptureScreenshot: handleCaptureScreenshot,
+                screenshotBusy,
               }
             : undefined
         }
@@ -465,10 +523,10 @@ export function FloatingAssistant(props: FloatingAssistantProps) {
                 />
               </div>
             ) : (
-              <p className="text-[0.85em] text-[var(--panel-muted)]">Listening for relevant questions…</p>
+              <p className="text-[0.85em] text-[var(--panel-muted)]">{idleMessage}</p>
             )
           ) : orderedQuestions.length === 0 && manualResponses.length === 0 ? (
-            <p className="text-[0.85em] text-[var(--panel-muted)]">Listening for relevant questions…</p>
+            <p className="text-[0.85em] text-[var(--panel-muted)]">{idleMessage}</p>
           ) : (
             <div className={`flex flex-col ${bodyGap}`}>
               {manualResponses.map((r) => (
@@ -527,9 +585,15 @@ export function FloatingAssistant(props: FloatingAssistantProps) {
           )}
         </div>
 
-        {!prefs.focusMode && <AskAIInput ref={askRef} onAsk={props.onAsk} />}
+        {/* Was gated behind !focusMode, which also hid it from ⌘⇧A (focus-ask
+            just calls askRef.current?.focus() — a no-op ref to an unmounted
+            element) — Focus Mode silently made manual asking impossible,
+            with no visible affordance and no working shortcut. Same fix as
+            the transcript drawer: keep it reachable regardless of mode. */}
+        <AskAIInput ref={askRef} onAsk={props.onAsk} />
 
         <ResizeHandle onPointerDown={resize.onPointerDown} onPointerMove={resize.onPointerMove} onPointerUp={resize.onPointerUp} />
+      </div>
       </div>
     </div>
   );

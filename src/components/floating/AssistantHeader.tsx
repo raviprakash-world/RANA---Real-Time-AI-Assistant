@@ -39,7 +39,7 @@ function ToolbarPill({
       }`}
     >
       {label}
-      {shortcut && <span className="font-mono text-[9px] opacity-60">{shortcut}</span>}
+      {shortcut && <span className="hidden font-mono text-[9px] opacity-60 @[540px]:inline">{shortcut}</span>}
     </button>
   );
 }
@@ -49,6 +49,7 @@ function ToolbarIconButton({
   onClick,
   active,
   warn,
+  disabled,
   title,
   ariaLabel,
   children,
@@ -56,6 +57,7 @@ function ToolbarIconButton({
   onClick: () => void;
   active?: boolean;
   warn?: boolean;
+  disabled?: boolean;
   title: string;
   ariaLabel?: string;
   children: React.ReactNode;
@@ -64,10 +66,11 @@ function ToolbarIconButton({
     <button
       type="button"
       onClick={onClick}
+      disabled={disabled}
       aria-pressed={active}
       title={title}
       aria-label={ariaLabel ?? title}
-      className={`focus-ring flex shrink-0 items-center justify-center rounded-[var(--panel-radius-sm)] border px-1.5 py-1 text-[12px] leading-none transition-colors ${
+      className={`focus-ring flex shrink-0 items-center justify-center rounded-[var(--panel-radius-sm)] border px-1.5 py-1 text-[12px] leading-none transition-colors disabled:opacity-50 ${
         warn
           ? "border-warning/40 bg-warning/15 text-warning"
           : active
@@ -131,6 +134,8 @@ export function AssistantHeader({
     clickThroughActive: boolean;
     onToggleClickThrough: () => void;
     onMoveToSecondary: () => void;
+    onCaptureScreenshot: () => void;
+    screenshotBusy: boolean;
   };
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -147,7 +152,7 @@ export function AssistantHeader({
 
   return (
     <div
-      className="floating-layer flex shrink-0 cursor-grab items-center gap-1.5 px-2.5 py-2 active:cursor-grabbing"
+      className="floating-layer @container flex shrink-0 cursor-grab items-center gap-1.5 px-2.5 py-2 active:cursor-grabbing"
       onPointerDown={onDragPointerDown}
       onPointerMove={onDragPointerMove}
       onPointerUp={onDragPointerUp}
@@ -161,7 +166,7 @@ export function AssistantHeader({
       </div>
 
       {!focusMode && (
-        <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto">
+        <div className="scrollbar-none flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto">
           <ToolbarPill label="Ask AI" shortcut="⌘⇧A" onClick={onFocusAsk} />
           <ToolbarPill label={isPaused ? "Resume" : "Pause"} shortcut="⌘⇧P" active={isPaused} onClick={onTogglePause} />
         </div>
@@ -174,10 +179,20 @@ export function AssistantHeader({
         <ToolbarIconButton title={transcriptVisible ? "Hide transcript (⌘⇧T)" : "Show transcript (⌘⇧T)"} active={transcriptVisible} onClick={onToggleTranscript}>
           ☰
         </ToolbarIconButton>
+        {desktop && (
+          <ToolbarIconButton
+            title={desktop.screenshotBusy ? "Analyzing screenshot…" : "Screenshot a coding problem"}
+            onClick={desktop.onCaptureScreenshot}
+            active={desktop.screenshotBusy}
+            disabled={desktop.screenshotBusy}
+          >
+            {desktop.screenshotBusy ? "…" : "⎙"}
+          </ToolbarIconButton>
+        )}
         <ToolbarIconButton title={presentationActive ? "Exit presentation mode" : "Presentation mode (⌘⇧H)"} active={presentationActive} onClick={onTogglePresentation}>
           ▤
         </ToolbarIconButton>
-        <ToolbarIconButton title={focusMode ? "Exit focus mode" : "Focus mode"} active={focusMode} onClick={onToggleFocusMode}>
+        <ToolbarIconButton title={focusMode ? "Exit focus mode (⌘⇧F)" : "Focus mode (⌘⇧F)"} active={focusMode} onClick={onToggleFocusMode}>
           ◎
         </ToolbarIconButton>
 

@@ -71,11 +71,17 @@ export function answerGenerationTaskPrompt(params: {
   questionType: QuestionType;
   questionText: string;
   manualInstruction?: string;
+  /** A screenshot is attached to this request — always solve it as a coding problem, not a free-text "manual" answer. */
+  hasImage?: boolean;
 }): string {
-  const shapeKey = params.manualInstruction ? "manual" : TYPE_TO_SHAPE_KEY[params.questionType];
+  const shapeKey = params.hasImage ? "coding" : params.manualInstruction ? "manual" : TYPE_TO_SHAPE_KEY[params.questionType];
   const shape = SHAPES[shapeKey];
 
-  const instructionLine = params.manualInstruction
+  const instructionLine = params.hasImage
+    ? `The user shared a screenshot of a coding problem from their meeting/interview. Read the problem statement from the image and solve it.${
+        params.manualInstruction ? ` Additional note from the user: "${params.manualInstruction}"` : ""
+      }`
+    : params.manualInstruction
     ? `The user directly asked the assistant: "${params.manualInstruction}"`
     : `Generate assistance for this detected question: "${params.questionText}"`;
 

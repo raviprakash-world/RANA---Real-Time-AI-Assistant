@@ -1,8 +1,14 @@
 export type LLMRole = "system" | "user" | "assistant";
 
+/** Mirrors OpenAI's chat content-part shape so it passes through unchanged. */
+export type LLMContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
+
 export interface LLMMessage {
   role: LLMRole;
-  content: string;
+  /** Array form is for a user message carrying an image (e.g. a screenshot) alongside text. */
+  content: string | LLMContentPart[];
 }
 
 export type TaskHint =

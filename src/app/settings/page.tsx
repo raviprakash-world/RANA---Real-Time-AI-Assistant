@@ -3,7 +3,17 @@
 import { useEffect, useState } from "react";
 import { api, UserPreference } from "@/lib/client/api";
 import { useFloatingPreferences } from "@/hooks/useFloatingPreferences";
-import { CornerPosition, Density, DEFAULT_FLOATING_UI_PREFS, FontSize, PresentationDisplayChoice, Theme } from "@/lib/floating/types";
+import {
+  CornerPosition,
+  Density,
+  DEFAULT_FLOATING_UI_PREFS,
+  FontSize,
+  HUD_SCALE_DEFAULT,
+  HUD_SCALE_MAX,
+  HUD_SCALE_MIN,
+  PresentationDisplayChoice,
+  Theme,
+} from "@/lib/floating/types";
 import { DesktopCapabilities, WEB_CAPABILITIES, getCapabilities, getDesktopShell } from "@/lib/floating/desktop-capabilities";
 import { usePresentationMode } from "@/hooks/usePresentationMode";
 
@@ -218,6 +228,35 @@ export default function SettingsPage() {
             </select>
           </label>
 
+          <label className="flex flex-col gap-1.5 text-sm">
+            <span className="flex items-center justify-between">
+              <span>HUD scale</span>
+              <span className="flex items-center gap-2">
+                <span className="text-muted">{floating.prefs.hudScale}%</span>
+                {floating.prefs.hudScale !== HUD_SCALE_DEFAULT && (
+                  <button
+                    type="button"
+                    onClick={() => floating.update({ hudScale: HUD_SCALE_DEFAULT })}
+                    className="focus-ring text-xs text-accent hover:underline"
+                  >
+                    Reset
+                  </button>
+                )}
+              </span>
+            </span>
+            <input
+              type="range"
+              min={HUD_SCALE_MIN}
+              max={HUD_SCALE_MAX}
+              step={5}
+              value={floating.prefs.hudScale}
+              onChange={(e) => floating.update({ hudScale: parseInt(e.target.value) })}
+            />
+            <span className="text-xs text-muted">
+              Scales the HUD&rsquo;s text, icons, and spacing independently of the window size you drag it to.
+            </span>
+          </label>
+
           <fieldset>
             <legend className="mb-2 text-sm">Assistant position</legend>
             <div role="radiogroup" aria-label="Assistant position" className="grid grid-cols-2 gap-2">
@@ -258,7 +297,12 @@ export default function SettingsPage() {
             <button
               type="button"
               onClick={() => {
-                floating.update({ ...DEFAULT_FLOATING_UI_PREFS, theme: floating.prefs.theme, fontSize: floating.prefs.fontSize });
+                floating.update({
+                  ...DEFAULT_FLOATING_UI_PREFS,
+                  theme: floating.prefs.theme,
+                  fontSize: floating.prefs.fontSize,
+                  hudScale: floating.prefs.hudScale,
+                });
                 getDesktopShell()?.resetPosition();
               }}
               className="focus-ring shrink-0 rounded-md border border-border px-3 py-1.5 text-xs font-medium hover:bg-surface-2"

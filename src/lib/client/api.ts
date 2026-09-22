@@ -69,6 +69,9 @@ export const api = {
   askAI: (id: string, instruction: string) =>
     request(`/api/sessions/${id}/ask`, { method: "POST", body: JSON.stringify({ instruction }) }),
 
+  askAboutScreenshot: (id: string, imageDataUrl: string, note?: string) =>
+    request(`/api/sessions/${id}/screenshot`, { method: "POST", body: JSON.stringify({ imageDataUrl, note }) }),
+
   getPreferences: () => request<{ preference: UserPreference }>("/api/preferences"),
   updatePreferences: (patch: Partial<UserPreference>) =>
     request<{ preference: UserPreference }>("/api/preferences", {

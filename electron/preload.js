@@ -47,6 +47,7 @@ contextBridge.exposeInMainWorld("desktopShell", {
   toggleClickThrough: () => ipcRenderer.send("desktop:toggle-click-through"),
   resetPosition: () => ipcRenderer.send("desktop:reset-position"),
   getDisplays: () => ipcRenderer.invoke("desktop:get-displays"),
+  captureScreenshot: () => ipcRenderer.invoke("desktop:capture-screenshot"),
   setPresentationMode: (enabled, display) => ipcRenderer.send("desktop:set-presentation-mode", { enabled, display }),
   moveToSecondaryDisplay: () => ipcRenderer.send("desktop:move-to-secondary"),
 

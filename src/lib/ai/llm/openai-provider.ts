@@ -28,7 +28,7 @@ export class OpenAIProvider implements LLMProvider {
       const completion = await this.client.chat.completions.create(
         {
           model: this.model,
-          messages,
+          messages: messages as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
           temperature: opts.temperature ?? 0.4,
           max_tokens: opts.maxTokens ?? 700,
           response_format: opts.jsonMode ? { type: "json_object" } : undefined,
@@ -49,7 +49,7 @@ export class OpenAIProvider implements LLMProvider {
       const stream = await this.client.chat.completions.create(
         {
           model: this.model,
-          messages,
+          messages: messages as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
           temperature: opts.temperature ?? 0.4,
           max_tokens: opts.maxTokens ?? 700,
           response_format: opts.jsonMode ? { type: "json_object" } : undefined,

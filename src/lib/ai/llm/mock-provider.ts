@@ -31,7 +31,11 @@ export class MockLLMProvider implements LLMProvider {
 }
 
 function lastUserContent(messages: LLMMessage[]): string {
-  return [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
+  const content = [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
+  if (typeof content === "string") return content;
+  // Array content is a user message with an image attached (e.g. a
+  // screenshot) — mock mode has no vision, so just use the text part.
+  return content.filter((p) => p.type === "text").map((p) => p.text).join(" ");
 }
 
 /**

@@ -73,6 +73,16 @@ body.hud-mode #app-nav {
   background: var(--border);
 }
 
+/* For small horizontally-scrollable controls (e.g. the toolbar's pill row
+   when the panel is narrow) where the app's normal 10px scrollbar thumb is
+   visually disproportionate — scroll still works via trackpad/shortcuts. */
+.scrollbar-none {
+  scrollbar-width: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
 @keyframes pulse-dot {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.35; }

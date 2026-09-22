@@ -8,6 +8,7 @@ const {
   shell,
   ipcMain,
   nativeImage,
+  desktopCapturer,
 } = require("electron");
 
 const path = require("node:path");
@@ -49,6 +50,7 @@ const SHORTCUTS = {
   "CommandOrControl+Shift+X": "toggle-click-through",
   "CommandOrControl+Shift+H": "toggle-presentation",
   "CommandOrControl+Shift+M": "move-to-secondary",
+  "CommandOrControl+Shift+F": "toggle-focus",
 };
 
 const END_DEBOUNCE_MS = 400;
@@ -438,15 +440,25 @@ function moveHudToSecondaryDisplay() {
  */
 
 function createHudWindow(sessionId) {
+  // The real resize ceiling should be "how big is this screen", not a
+  // product-chosen number — a fixed 700x800 cap meant the HUD literally
+  // could not grow past that on any monitor, no matter how much room was
+  // available. Bound it by the work area of whichever display the window
+  // opens on instead, so "resize it as large as you want" is actually true
+  // up to what the OS can show.
+  const workArea = screen.getPrimaryDisplay().workArea;
+  const maxWidth = Math.max(900, workArea.width - 24);
+  const maxHeight = Math.max(800, workArea.height - 24);
+
   const win = new BrowserWindow({
-    width: 420,
-    height: 600,
+    width: 1053,
+    height: 512,
 
     minWidth: 320,
     minHeight: 180,
 
-    maxWidth: 700,
-    maxHeight: 800,
+    maxWidth,
+    maxHeight,
 
     frame: false,
     transparent: true,
@@ -1037,6 +1049,54 @@ ipcMain.handle(
 
 /**
  * ============================================================================
+ * Screenshot Capture (spec: "screenshot a coding problem in the meeting")
+ * ============================================================================
+ */
+
+ipcMain.handle(
+  "desktop:capture-screenshot",
+  async () => {
+    try {
+      // Capture whichever display the cursor is currently on — that's the
+      // screen the user is actually looking at (the meeting/problem), not
+      // necessarily the primary display if the HUD lives on a secondary one.
+      const cursorPoint = screen.getCursorScreenPoint();
+      const targetDisplay = screen.getDisplayNearestPoint(cursorPoint);
+
+      // Cap the capture resolution — full native resolution on a 4K/5K
+      // display makes for a multi-MB PNG that's slow to upload and no more
+      // legible to a vision model; 1920px on the long edge is still plenty
+      // to read a code editor or a problem statement.
+      const scale = Math.min(1, 1920 / targetDisplay.size.width);
+      const thumbnailSize = {
+        width: Math.round(targetDisplay.size.width * scale),
+        height: Math.round(targetDisplay.size.height * scale),
+      };
+
+      const sources = await desktopCapturer.getSources({
+        types: ["screen"],
+        thumbnailSize,
+      });
+      if (sources.length === 0) {
+        return {
+          error:
+            "No screen source available. macOS may require Screen Recording permission (System Settings → Privacy & Security → Screen Recording), then a restart.",
+        };
+      }
+
+      const matched =
+        sources.find((s) => s.display_id && String(targetDisplay.id) === s.display_id) ??
+        sources[0];
+
+      return { dataUrl: matched.thumbnail.toDataURL() };
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : "Screenshot capture failed." };
+    }
+  }
+);
+
+/**
+ * ============================================================================
  * Presentation Mode IPC
  * ============================================================================
  *
@@ -1116,14 +1176,14 @@ ipcMain.on(
       x:
         primary.x +
         primary.width -
-        420 -
+        1053 -
         16,
 
       y:
         primary.y + 16,
 
-      width: 420,
-      height: 600,
+      width: 1053,
+      height: 512,
     };
 
     hudWindow.setBounds(bounds);

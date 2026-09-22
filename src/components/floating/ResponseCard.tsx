@@ -30,11 +30,18 @@ export function ResponseCard({
   onFeedback: (next: "up" | "down" | null) => void;
 }) {
   return (
-    <div className="response-enter flex flex-col gap-2.5">
+    <div className="response-enter @container flex flex-col gap-2.5">
       {badge}
       {questionText && <QuestionBlock text={questionText} />}
       <AssistantResponse payload={payload} questionText={questionText} onQuickAction={onQuickAction} />
-      <ResponseFooter receivedAt={receivedAt} feedback={feedback} onFeedback={onFeedback} />
+      {/* Adaptive density: metadata (timestamp) and secondary actions
+          (feedback) are the one thing safe to hide uniformly at very small
+          sizes — unlike answer content (STAR sections, architecture, key
+          points), which stays visible regardless of size since the answer
+          itself must always stay readable. */}
+      <div className="hidden @[360px]:block">
+        <ResponseFooter receivedAt={receivedAt} feedback={feedback} onFeedback={onFeedback} />
+      </div>
     </div>
   );
 }

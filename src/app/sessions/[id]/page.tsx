@@ -20,6 +20,7 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
   const [speakerTag, setSpeakerTag] = useState<"USER" | "UNKNOWN">("UNKNOWN");
   const [attachedContext, setAttachedContext] = useState<AttachedContextItem[]>([]);
   const [ending, setEnding] = useState(false);
+  const [screenshotError, setScreenshotError] = useState<string | null>(null);
 
   const live = useSessionEvents(sessionId);
 
@@ -150,6 +151,29 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
     [sessionId]
   );
 
+  // Capture happens client-side (Electron main process) before anything
+  // reaches the server, so a failure here (no desktop shell, denied OS
+  // permission) can't come back over SSE like every other error path — it
+  // has to be surfaced locally.
+  const handleScreenshot = useCallback(async () => {
+    setScreenshotError(null);
+    const shell = getDesktopShell();
+    if (!shell) {
+      setScreenshotError("Screenshot capture is only available in the desktop app.");
+      return;
+    }
+    const result = await shell.captureScreenshot();
+    if (!result.dataUrl) {
+      setScreenshotError(result.error ?? "Screenshot capture failed.");
+      return;
+    }
+    try {
+      await api.askAboutScreenshot(sessionId, result.dataUrl);
+    } catch (e) {
+      setScreenshotError(e instanceof Error ? e.message : "Failed to send screenshot.");
+    }
+  }, [sessionId]);
+
   const handleClearHistory = useCallback(async () => {
     await api.clearHistory(sessionId);
     setSession((prev) => (prev ? { ...prev, questions: [], aiResponses: [] } : prev));
@@ -262,7 +286,7 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
       </div>
     ) : null;
 
-  const errorText = speech.error?.message || live.errorMessage;
+  const errorText = speech.error?.message || live.errorMessage || screenshotError;
   const errorBanner = errorText ? (
     <div className="border-b border-[var(--panel-border)] bg-danger/15 px-3 py-1.5 text-[11px] text-danger">{errorText}</div>
   ) : null;
@@ -282,6 +306,7 @@ export default function SessionPage({ params }: { params: Promise<{ id: string }
         onTogglePause={togglePause}
         onEnd={handleEnd}
         onAsk={handleAsk}
+        onScreenshot={handleScreenshot}
         onClearHistory={handleClearHistory}
         attachedContext={attachedContext}
         onAddContext={handleAddContext}

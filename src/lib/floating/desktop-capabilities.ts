@@ -45,6 +45,8 @@ export interface DesktopShellApi {
   toggleClickThrough: () => void;
   resetPosition: () => void;
   getDisplays: () => Promise<DisplayInfo[]>;
+  /** Captures the screen the cursor is currently on. Returns a data URL, or an error (e.g. missing OS permission). */
+  captureScreenshot: () => Promise<{ dataUrl: string; error?: undefined } | { dataUrl?: undefined; error: string }>;
   setPresentationMode: (enabled: boolean, display: PresentationDisplayChoice) => void;
   moveToSecondaryDisplay: () => void;
   onShortcut: (callback: (action: DesktopShortcutAction) => void) => () => void;
@@ -58,7 +60,8 @@ export type DesktopShortcutAction =
   | "toggle-pause"
   | "toggle-transcript"
   | "end-session"
-  | "toggle-presentation";
+  | "toggle-presentation"
+  | "toggle-focus";
 
 declare global {
   interface Window {
