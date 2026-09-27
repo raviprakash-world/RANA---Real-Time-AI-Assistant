@@ -78,6 +78,16 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(patch),
     }),
+
+  listPinnedContexts: () => request<{ contexts: PinnedContext[] }>("/api/contexts"),
+  addPinnedContext: (entry: { label: string; kind: PinnedContextKind; text: string }) =>
+    request<{ context: PinnedContext }>("/api/contexts", { method: "POST", body: JSON.stringify(entry) }),
+  deletePinnedContext: (id: string) => request<{ ok: true }>(`/api/contexts/${id}`, { method: "DELETE" }),
+
+  listPersonas: () => request<{ personas: Persona[] }>("/api/personas"),
+  addPersona: (entry: { name: string; role?: string; experience?: string; additionalInstructions?: string }) =>
+    request<{ persona: Persona }>("/api/personas", { method: "POST", body: JSON.stringify(entry) }),
+  deletePersona: (id: string) => request<{ ok: true }>(`/api/personas/${id}`, { method: "DELETE" }),
 };
 
 export interface CreateSessionInput {
@@ -160,4 +170,23 @@ export interface UserPreference {
   llmProvider: string;
   llmModel: string;
   floatingUi: Record<string, unknown>;
+}
+
+export type PinnedContextKind = "RESUME" | "JOB_DESCRIPTION" | "IDE" | "BROWSER" | "TERMINAL" | "SCREEN" | "OTHER";
+
+export interface PinnedContext {
+  id: string;
+  label: string;
+  kind: PinnedContextKind;
+  text: string;
+  createdAt: string;
+}
+
+export interface Persona {
+  id: string;
+  name: string;
+  role: string | null;
+  experience: string | null;
+  additionalInstructions: string | null;
+  createdAt: string;
 }

@@ -269,6 +269,30 @@ export function AssistantHeader({
                 </>
               )}
               <Link
+                href="/history"
+                role="menuitem"
+                onClick={() => setMenuOpen(false)}
+                className="focus-ring rounded-[var(--panel-radius-sm)] px-2 py-1.5 text-left hover:bg-[var(--panel-surface-2)]"
+              >
+                Session History
+              </Link>
+              <Link
+                href="/contexts"
+                role="menuitem"
+                onClick={() => setMenuOpen(false)}
+                className="focus-ring rounded-[var(--panel-radius-sm)] px-2 py-1.5 text-left hover:bg-[var(--panel-surface-2)]"
+              >
+                Pinned Contexts
+              </Link>
+              <Link
+                href="/personas"
+                role="menuitem"
+                onClick={() => setMenuOpen(false)}
+                className="focus-ring rounded-[var(--panel-radius-sm)] px-2 py-1.5 text-left hover:bg-[var(--panel-surface-2)]"
+              >
+                Personas
+              </Link>
+              <Link
                 href="/settings"
                 role="menuitem"
                 onClick={() => setMenuOpen(false)}

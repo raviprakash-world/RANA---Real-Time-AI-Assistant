@@ -9,7 +9,26 @@
     "lint": "eslint",
     "test": "vitest run",
     "desktop": "electron electron/main.js",
-    "postinstall": "node scripts/fix-electron-mac-signing.js"
+    "postinstall": "node scripts/patch-electron-dev-app.js",
+    "dist:mac": "electron-builder --mac",
+    "dist:win": "electron-builder --win"
+  },
+  "build": {
+    "appId": "com.raviprakash.rana",
+    "productName": "RANA",
+    "files": [
+      "electron/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "mac": {
+      "category": "public.app-category.productivity"
+    },
+    "win": {
+      "target": "nsis"
+    }
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
@@ -33,6 +52,7 @@
     "@types/uuid": "^10.0.0",
     "@vitejs/plugin-react": "^6.1.1",
     "electron": "^44.1.1",
+    "electron-builder": "^26.15.3",
     "eslint": "^9",
     "eslint-config-next": "16.3.4",
     "tailwindcss": "^4",

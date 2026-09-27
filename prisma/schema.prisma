@@ -72,8 +72,49 @@ model User {
   name        String?
   createdAt   DateTime @default(now())
 
-  sessions    Session[]
-  preference  UserPreference?
+  sessions        Session[]
+  preference      UserPreference?
+  pinnedContexts  PinnedContext[]
+  personas        Persona[]
+}
+
+// A reusable context asset (resume, a system-design template, a recurring
+// prompt fragment) saved once and attached to any future session — unlike
+// UploadedContext below, which is scoped to a single Session and deleted
+// with it. Injected into a new session's uploadedContext at creation time
+// (see /sessions/new), same downstream handling either way.
+model PinnedContext {
+  id        String              @id @default(cuid())
+  userId    String
+  user      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  label     String
+  kind      UploadedContextKind @default(OTHER)
+  text      String
+
+  createdAt DateTime            @default(now())
+
+  @@index([userId, createdAt])
+}
+
+// A saved preset of the fields on /sessions/new (role, experience level,
+// standing instructions) — "switch to Backend Developer Mode" is picking a
+// Persona to prefill the New Session form with, not a distinct LLM
+// subsystem; the actual system prompt still comes from the session's mode
+// (see lib/ai/prompts/system/).
+model Persona {
+  id                      String   @id @default(cuid())
+  userId                  String
+  user                    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name                    String
+  role                    String?
+  experience              String?
+  additionalInstructions  String?
+
+  createdAt               DateTime @default(now())
+
+  @@index([userId, createdAt])
 }
 
 model UserPreference {

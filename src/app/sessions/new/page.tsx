@@ -1,8 +1,9 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
-import { api, CreateSessionInput } from "@/lib/client/api";
+import { useEffect, useState } from "react";
+import { api, CreateSessionInput, Persona, PinnedContext } from "@/lib/client/api";
 
 const MODES: { value: CreateSessionInput["mode"]; label: string; blurb: string }[] = [
   { value: "INTERVIEW", label: "Interview", blurb: "Interviewer questions & answer suggestions" },
@@ -36,6 +37,29 @@ export default function NewSessionPage() {
   const [uploadingKind, setUploadingKind] = useState<"RESUME" | "JOB_DESCRIPTION" | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const [personas, setPersonas] = useState<Persona[]>([]);
+  const [pinnedContexts, setPinnedContexts] = useState<PinnedContext[]>([]);
+  const [selectedPersonaId, setSelectedPersonaId] = useState("");
+  const [selectedPinnedIds, setSelectedPinnedIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    api.listPersonas().then((r) => setPersonas(r.personas)).catch(() => {});
+    api.listPinnedContexts().then((r) => setPinnedContexts(r.contexts)).catch(() => {});
+  }, []);
+
+  function applyPersona(id: string) {
+    setSelectedPersonaId(id);
+    const persona = personas.find((p) => p.id === id);
+    if (!persona) return;
+    if (persona.role && ROLES.includes(persona.role)) setRole(persona.role);
+    if (persona.experience && EXPERIENCE.includes(persona.experience)) setExperience(persona.experience);
+    if (persona.additionalInstructions) setInstructions(persona.additionalInstructions);
+  }
+
+  function togglePinned(id: string) {
+    setSelectedPinnedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  }
 
   async function handleFile(e: React.ChangeEvent<HTMLInputElement>, kind: "RESUME" | "JOB_DESCRIPTION") {
     const file = e.target.files?.[0];
@@ -78,13 +102,26 @@ export default function NewSessionPage() {
     setSubmitting(true);
     setError(null);
     try {
+      // Session creation only accepts RESUME/JOB_DESCRIPTION/OTHER for
+      // uploadedContext — a pinned context saved under a live-session-only
+      // kind (IDE/BROWSER/TERMINAL/SCREEN) still attaches fine, just filed
+      // as OTHER here.
+      const pinnedAsUploaded = pinnedContexts
+        .filter((c) => selectedPinnedIds.includes(c.id))
+        .map((c) => ({
+          kind: (c.kind === "RESUME" || c.kind === "JOB_DESCRIPTION" ? c.kind : "OTHER") as "RESUME" | "JOB_DESCRIPTION" | "OTHER",
+          filename: c.label,
+          text: c.text,
+        }));
+      const combinedUploaded = [...(uploadedContext ?? []), ...pinnedAsUploaded];
+
       const { session } = await api.createSession({
         mode,
         role: mode === "CUSTOM" ? undefined : role,
         experience,
         context: context || undefined,
         additionalInstructions: instructions || undefined,
-        uploadedContext: uploadedContext?.length ? uploadedContext : undefined,
+        uploadedContext: combinedUploaded.length ? combinedUploaded : undefined,
       });
       router.push(`/sessions/${session.id}`);
     } catch (err) {
@@ -119,6 +156,30 @@ export default function NewSessionPage() {
             ))}
           </div>
         </fieldset>
+
+        {personas.length > 0 && (
+          <label className="flex flex-col gap-1.5 text-sm">
+            <span className="flex items-center justify-between font-medium">
+              <span>Persona (optional)</span>
+              <Link href="/personas" className="focus-ring text-xs font-normal text-accent hover:underline">
+                Manage personas
+              </Link>
+            </span>
+            <select
+              value={selectedPersonaId}
+              onChange={(e) => applyPersona(e.target.value)}
+              className="focus-ring rounded-md border border-border bg-surface px-3 py-2 text-sm"
+            >
+              <option value="">— Fill in manually —</option>
+              {personas.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+            <span className="text-xs text-muted">Prefills role, experience, and instructions below — still editable after.</span>
+          </label>
+        )}
 
         {mode !== "CUSTOM" && (
           <label className="flex flex-col gap-1.5 text-sm">
@@ -192,6 +253,30 @@ export default function NewSessionPage() {
           <p className="text-xs text-success">
             Attached: {uploadedContext.map((u) => u.filename).join(", ")}
           </p>
+        )}
+
+        {pinnedContexts.length > 0 && (
+          <fieldset>
+            <legend className="mb-2 flex w-full items-center justify-between text-sm font-medium">
+              <span>Pinned contexts (optional)</span>
+              <Link href="/contexts" className="focus-ring text-xs font-normal text-accent hover:underline">
+                Manage pinned contexts
+              </Link>
+            </legend>
+            <div className="flex flex-col gap-1.5">
+              {pinnedContexts.map((c) => (
+                <label key={c.id} className="focus-ring flex items-center gap-2 rounded-md border border-border bg-surface px-3 py-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={selectedPinnedIds.includes(c.id)}
+                    onChange={() => togglePinned(c.id)}
+                  />
+                  <span className="flex-1">{c.label}</span>
+                  <span className="text-xs text-muted">{c.kind}</span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
         )}
 
         <label className="flex flex-col gap-1.5 text-sm">

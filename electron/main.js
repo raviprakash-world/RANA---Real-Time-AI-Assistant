@@ -13,6 +13,16 @@ const {
 
 const path = require("node:path");
 
+// Overrides the generic "Electron" name Chromium/the OS would otherwise use
+// (Dock tooltip, Activity Monitor/Task Manager, crash reports, userData path
+// on Linux/Windows). Must run before app.whenReady() — as early as possible,
+// in fact, since some of what it affects is read at process startup. This
+// does NOT change the macOS menu bar text in dev mode, though — that's read
+// from the Electron.app bundle's own Info.plist regardless of this call; see
+// scripts/patch-electron-dev-app.js for that half of the fix, and the
+// `build.productName` config in package.json for a real packaged app.
+app.setName("RANA");
+
 /**
  * ============================================================================
  * Real-Time Assistant — Electron Main Process
@@ -685,6 +695,85 @@ function registerGlobalShortcuts() {
 
 /**
  * ============================================================================
+ * Application Menu (native menu bar: File/Edit/View/Window/Help on macOS,
+ * a slimmer version on Windows/Linux)
+ * ============================================================================
+ *
+ * Electron shows a default menu automatically if this is never called — but
+ * its default Help submenu points at Electron's own project, not RANA's.
+ * `role: "windowMenu"`/`role: "help"` below still give the OS-native
+ * Window/Help behavior (window list, minimize, zoom, etc.); only the Help
+ * items themselves are app-specific.
+ */
+
+function buildApplicationMenu() {
+  const template = [
+    ...(process.platform === "darwin" ? [{ role: "appMenu" }] : []),
+    { role: "fileMenu" },
+    { role: "editMenu" },
+    { role: "viewMenu" },
+    {
+      label: "History",
+      submenu: [
+        {
+          label: "Browse Sessions",
+          click: () => showLauncher("/history"),
+        },
+      ],
+    },
+    {
+      label: "Bookmarks",
+      submenu: [
+        {
+          label: "Manage Pinned Contexts",
+          click: () => showLauncher("/contexts"),
+        },
+      ],
+    },
+    {
+      label: "Profiles",
+      submenu: [
+        {
+          label: "Manage Personas",
+          click: () => showLauncher("/personas"),
+        },
+      ],
+    },
+    {
+      label: "Tab",
+      submenu: [
+        {
+          label: "Manage Personas",
+          click: () => showLauncher("/personas"),
+        },
+      ],
+    },
+    { role: "windowMenu" },
+    {
+      role: "help",
+      submenu: [
+        {
+          label: "RANA Documentation",
+          click: () =>
+            shell.openExternal(
+              "https://github.com/raviprakash-world/RANA---Real-Time-AI-Assistant#readme"
+            ),
+        },
+        {
+          label: "Keyboard Shortcuts",
+          click: () => showLauncher("/settings"),
+        },
+      ],
+    },
+  ];
+
+  Menu.setApplicationMenu(
+    Menu.buildFromTemplate(template)
+  );
+}
+
+/**
+ * ============================================================================
  * Tray
  * ============================================================================
  */
@@ -1210,6 +1299,8 @@ app.whenReady().then(() => {
 
   launcherWindow =
     createLauncherWindow();
+
+  buildApplicationMenu();
 
   createTray();
 
