@@ -18,6 +18,8 @@ export interface FloatingUiPrefs {
   fontSize: FontSize;
   focusMode: boolean;
   transcriptVisible: boolean;
+  /** Quick-notes drawer (pasted snippets) — see NotesDrawer.tsx. */
+  notesVisible: boolean;
   autoHide: boolean;
   collapsed: boolean;
   /** Desktop-shell-only; no-op in a plain browser tab (see desktop-capabilities.ts). */
@@ -72,6 +74,7 @@ export const DEFAULT_FLOATING_UI_PREFS: FloatingUiPrefs = {
   fontSize: "medium",
   focusMode: false,
   transcriptVisible: false,
+  notesVisible: false,
   autoHide: false,
   collapsed: false,
   alwaysOnTop: true,

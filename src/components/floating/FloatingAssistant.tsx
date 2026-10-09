@@ -10,6 +10,7 @@ import { AssistantHeader } from "./AssistantHeader";
 import { CompactIndicator } from "./CompactIndicator";
 import { ContextBar } from "./ContextBar";
 import { TranscriptDrawer } from "./TranscriptDrawer";
+import { NotesDrawer } from "./NotesDrawer";
 import { AskAIInput } from "./AskAIInput";
 import { ResizeHandle } from "./ResizeHandle";
 import { ResponseCard } from "./ResponseCard";
@@ -402,6 +403,8 @@ export function FloatingAssistant(props: FloatingAssistantProps) {
         onMinimize={() => update({ collapsed: true })}
         onToggleTranscript={() => update({ transcriptVisible: !prefs.transcriptVisible })}
         transcriptVisible={prefs.transcriptVisible}
+        onToggleNotes={() => update({ notesVisible: !prefs.notesVisible })}
+        notesVisible={prefs.notesVisible}
         onToggleContext={() => setContextVisible((v) => !v)}
         onClearHistory={handleClearHistory}
         onTogglePause={props.onTogglePause}
@@ -473,6 +476,8 @@ export function FloatingAssistant(props: FloatingAssistantProps) {
           onToggleSpeakerTag={props.onToggleSpeakerTag}
           onAskAbout={props.onAsk}
         />
+
+        <NotesDrawer visible={prefs.notesVisible} />
 
         <div className={`flex-1 overflow-y-auto ${bodyPadding}`} style={{ fontSize }}>
           {props.aiThinking ? (

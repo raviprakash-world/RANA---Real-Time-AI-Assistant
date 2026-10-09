@@ -94,6 +94,8 @@ export function AssistantHeader({
   onMinimize,
   onToggleTranscript,
   transcriptVisible,
+  onToggleNotes,
+  notesVisible,
   onToggleContext,
   onClearHistory,
   onTogglePause,
@@ -117,6 +119,8 @@ export function AssistantHeader({
   onMinimize: () => void;
   onToggleTranscript: () => void;
   transcriptVisible: boolean;
+  onToggleNotes: () => void;
+  notesVisible: boolean;
   onToggleContext: () => void;
   onClearHistory: () => void;
   onTogglePause: () => void;
@@ -178,6 +182,9 @@ export function AssistantHeader({
             to check the transcript regardless of which mode you're in. */}
         <ToolbarIconButton title={transcriptVisible ? "Hide transcript (⌘⇧T)" : "Show transcript (⌘⇧T)"} active={transcriptVisible} onClick={onToggleTranscript}>
           ☰
+        </ToolbarIconButton>
+        <ToolbarIconButton title={notesVisible ? "Hide notes" : "Show notes"} active={notesVisible} onClick={onToggleNotes}>
+          ✎
         </ToolbarIconButton>
         {desktop && (
           <ToolbarIconButton
